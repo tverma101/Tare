@@ -41,7 +41,8 @@ public final class TranscriptExporter {
         _ transcript: Transcript,
         sourceURL: URL,
         to outputDirectory: URL,
-        formats: Set<ExportFormat>
+        formats: Set<ExportFormat>,
+        baseName: String? = nil
     ) async throws -> [URL] {
         guard !formats.isEmpty else {
             throw TranscriptExporterError.noFormatsSelected
@@ -54,7 +55,8 @@ public final class TranscriptExporter {
 
         var writtenURLs: [URL] = []
         do {
-        let baseName = OutputFolderPlanner.transcriptBaseName(for: sourceURL)
+        let resolvedBaseName = baseName.map(OutputFolderPlanner.sanitizedBaseName)
+            ?? OutputFolderPlanner.transcriptBaseName(for: sourceURL)
 
         for format in ExportFormat.allCases where formats.contains(format) {
             if format == .captionedVideo {
@@ -62,7 +64,7 @@ public final class TranscriptExporter {
                     transcript,
                     sourceURL: sourceURL,
                     outputDirectory: outputDirectory,
-                    baseName: baseName
+                    baseName: resolvedBaseName
                 ) {
                     writtenURLs.append(captionedVideoURL)
                 }
@@ -70,7 +72,7 @@ public final class TranscriptExporter {
             }
 
             let preferredURL = outputDirectory
-                .appendingPathComponent("\(baseName).\(filenameSuffix(for: format))")
+                .appendingPathComponent("\(resolvedBaseName).\(filenameSuffix(for: format))")
                 .appendingPathExtension(format.fileExtension)
             let destinationURL = uniqueURL(for: preferredURL)
             let data = try data(for: transcript, format: format)

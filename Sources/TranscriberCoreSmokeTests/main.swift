@@ -15,6 +15,11 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @main
 enum TranscriberCoreSmokeTests {
     static func main() async throws {
+        if CommandLine.arguments.contains("--freellm-live") {
+            try await testFreeLLMLiveNaming()
+            return
+        }
+
         if CommandLine.arguments.contains("--exports-only") {
             try await testExportsTextSRTVTTAndJSON()
             try await testExportsTimestampedTranscriptWhenRequested()
@@ -22,6 +27,8 @@ enum TranscriberCoreSmokeTests {
             try await testExportsWordTimingsCSV()
             try await testAudioLyricsEmbedderReplacesSourceWithBackup()
             try testTranscriptLinkerWritesAndReadsManifest()
+            try testTranscriptNamingFallbackAndParsing()
+            try testOutputFolderPlannerCreatesSemanticFolder()
             try testAudioLyricsEmbedderOnlyTargetsContainersThatPersistLyrics()
             try await testExporterUsesUniquePathInsteadOfOverwriting()
             try await testExporterCollapsesPunctuationInOutputBasename()
@@ -38,6 +45,8 @@ enum TranscriberCoreSmokeTests {
         try await testExportsWordTimingsCSV()
         try await testAudioLyricsEmbedderReplacesSourceWithBackup()
         try testTranscriptLinkerWritesAndReadsManifest()
+        try testTranscriptNamingFallbackAndParsing()
+        try testOutputFolderPlannerCreatesSemanticFolder()
         try testAudioLyricsEmbedderOnlyTargetsContainersThatPersistLyrics()
         try await testExporterUsesUniquePathInsteadOfOverwriting()
         try await testExporterCollapsesPunctuationInOutputBasename()
@@ -282,6 +291,74 @@ enum TranscriberCoreSmokeTests {
         let discovered = linker.existingLink(for: sourceURL)
         try expect(discovered?.linkID == metadata.linkID, "Tare did not rediscover the source-side transcript link.")
         try expect(discovered?.primaryTranscriptURL?.path == transcriptURL.standardizedFileURL.path, "Rediscovered transcript link points to the wrong transcript.")
+
+        let sidecarData = try Data(contentsOf: linker.sourceSidecarURL(for: sourceURL))
+        let sidecarText = String(data: sidecarData, encoding: .utf8) ?? ""
+        try expect(!sidecarText.contains("\n"), "Source-side transcript pointer should stay compact.")
+        try expect(manifestData != sidecarData, "Visible manifest and compact source pointer should use different formatting.")
+    }
+
+    private static func testTranscriptNamingFallbackAndParsing() throws {
+        let sourceURL = URL(fileURLWithPath: "/tmp/BIO-111_Scientific_Method_Recording.m4a")
+        let fallback = TranscriptNamingService.deterministicSuggestion(for: sourceURL)
+        try expect(fallback.title == "Bio 111 Scientific Method", "Filename fallback should remove recording noise and preserve course words.")
+        try expect(fallback.folderName == fallback.title, "Filename fallback should use one compact folder name.")
+        try expect(fallback.provider == "local", "Filename fallback should be explicitly local.")
+
+        let response = """
+        {"model":"gpt-oss-120b","choices":[{"message":{"content":"{\\"title\\":\\"BIO 111: Cell Membranes\\",\\"folder\\":\\"BIO 111 - Cell Membranes\\"}"}}]}
+        """
+        let parsed = TranscriptNamingService.parseSuggestion(
+            from: Data(response.utf8),
+            sourceURL: sourceURL,
+            modelIdentifier: "gpt-oss-120b"
+        )
+        try expect(parsed?.title == "BIO 111 - Cell Membranes", "LLM title parsing should sanitize filesystem punctuation.")
+        try expect(parsed?.folderName == "BIO 111 - Cell Membranes", "LLM folder parsing should preserve the compact subject name.")
+        try expect(parsed?.modelIdentifier == "gpt-oss-120b", "LLM parsing should retain the selected model identifier.")
+    }
+
+    private static func testFreeLLMLiveNaming() async throws {
+        guard let key = ProcessInfo.processInfo.environment["TARE_FREELLM_API_KEY"], !key.isEmpty else {
+            throw SmokeTestFailure.failed("Set TARE_FREELLM_API_KEY for the explicit live smoke test; it never reads Keychain.")
+        }
+
+        let transcript = Transcript(
+            sourceName: "BIO-111_lecture.m4a",
+            createdAt: Date(timeIntervalSince1970: 0),
+            localeIdentifier: "en_US",
+            fullText: "Today we compare phospholipid bilayers, membrane proteins, and the role of cholesterol in cell membrane fluidity.",
+            segments: []
+        )
+        let sourceURL = URL(fileURLWithPath: "/tmp/BIO-111_lecture.m4a")
+        let service = TranscriptNamingService(configuration: .discovered())
+        guard let suggestion = await service.suggestName(
+            for: transcript,
+            sourceURL: sourceURL,
+            apiKey: key
+        ) else {
+            throw SmokeTestFailure.failed("FreeLLMAPI did not return a usable naming suggestion.")
+        }
+
+        print("FreeLLMAPI live naming passed: \(suggestion.title) [\(suggestion.modelIdentifier)]")
+    }
+
+    private static func testOutputFolderPlannerCreatesSemanticFolder() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let folder = try OutputFolderPlanner.createTranscriptDirectory(
+            rootDirectory: temporaryDirectory,
+            title: "BIO 111 / Cell Membranes"
+        )
+        try expect(folder.lastPathComponent == "BIO 111 - Cell Membranes", "Semantic transcript folder should be filesystem-safe and readable.")
+        try expect(FileManager.default.fileExists(atPath: folder.path), "Semantic transcript folder was not created.")
+
+        let secondFolder = try OutputFolderPlanner.createTranscriptDirectory(
+            rootDirectory: temporaryDirectory,
+            title: "BIO 111 / Cell Membranes"
+        )
+        try expect(secondFolder.lastPathComponent == "BIO 111 - Cell Membranes 2", "Repeated exports should not overwrite a semantic transcript folder.")
     }
 
     private static func testAudioLyricsEmbedderOnlyTargetsContainersThatPersistLyrics() throws {
@@ -1297,6 +1374,7 @@ enum TranscriberCoreSmokeTests {
         )
         try expect(defaultConfiguration.formats == [.text], "Default app-side export formats should only include text.")
         try expect(defaultConfiguration.requiresWordTimestamps, "Default app-side transcription should keep word timing data for embedded outputs.")
+        try expect(defaultConfiguration.smartNamingEnabled, "Smart transcript naming should be enabled by default.")
 
         let fastPlain = TranscriptionConfiguration(
             outputDirectory: URL(fileURLWithPath: "/tmp"),

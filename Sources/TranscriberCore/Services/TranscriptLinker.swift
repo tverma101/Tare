@@ -22,6 +22,7 @@ public enum TranscriptLinkerError: Error, LocalizedError {
 public final class TranscriptLinker {
     private let fileManager: FileManager
     private let encoder: JSONEncoder
+    private let compactEncoder: JSONEncoder
     private let decoder: JSONDecoder
 
     public init(fileManager: FileManager = .default) {
@@ -31,17 +32,23 @@ public final class TranscriptLinker {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
 
+        compactEncoder = JSONEncoder()
+        compactEncoder.outputFormatting = [.sortedKeys]
+        compactEncoder.dateEncodingStrategy = .iso8601
+
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
     }
 
     public func manifestURL(
         for sourceURL: URL,
-        outputDirectory: URL
+        outputDirectory: URL,
+        baseName: String? = nil
     ) -> URL {
-        let baseName = OutputFolderPlanner.transcriptBaseName(for: sourceURL)
+        let resolvedBaseName = baseName.map(OutputFolderPlanner.sanitizedBaseName)
+            ?? OutputFolderPlanner.transcriptBaseName(for: sourceURL)
         let preferredURL = outputDirectory
-            .appendingPathComponent("\(baseName).tare-link")
+            .appendingPathComponent("\(resolvedBaseName).tare-link")
             .appendingPathExtension("json")
         return uniqueURL(for: preferredURL)
     }
@@ -58,7 +65,13 @@ public final class TranscriptLinker {
         sourceURL: URL,
         transcriptURLs: [URL],
         manifestURL: URL,
-        modelIdentifier: String
+        modelIdentifier: String,
+        displayName: String? = nil,
+        folderName: String? = nil,
+        namingProvider: String? = nil,
+        namingModelIdentifier: String? = nil,
+        namingStrategy: String? = nil,
+        transcriptDirectoryURL: URL? = nil
     ) -> TranscriptLinkMetadata {
         let sourceValues = try? sourceURL.resourceValues(forKeys: [
             .fileSizeKey,
@@ -79,7 +92,13 @@ public final class TranscriptLinker {
             transcriptSHA256: Self.sha256(for: transcript.fullText),
             modelIdentifier: modelIdentifier,
             localeIdentifier: transcript.localeIdentifier,
-            createdAt: transcript.createdAt
+            createdAt: transcript.createdAt,
+            displayName: displayName,
+            folderName: folderName,
+            namingProvider: namingProvider,
+            namingModelIdentifier: namingModelIdentifier,
+            namingStrategy: namingStrategy,
+            transcriptDirectoryPath: transcriptDirectoryURL?.standardizedFileURL.path
         )
     }
 
@@ -91,9 +110,11 @@ public final class TranscriptLinker {
     /// fail after the audio has already been tagged.
     @discardableResult
     public func write(_ metadata: TranscriptLinkMetadata) throws -> URL {
-        let data: Data
+        let manifestData: Data
+        let sidecarData: Data
         do {
-            data = try encoder.encode(metadata)
+            manifestData = try encoder.encode(metadata)
+            sidecarData = try compactEncoder.encode(metadata)
         } catch {
             throw TranscriptLinkerError.manifestEncodingFailed
         }
@@ -103,11 +124,11 @@ public final class TranscriptLinker {
             at: manifestURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try data.write(to: manifestURL, options: [.atomic])
+        try manifestData.write(to: manifestURL, options: [.atomic])
 
         let sidecarURL = URL(fileURLWithPath: metadata.sourceSidecarPath)
         if sidecarURL.standardizedFileURL.path != manifestURL.standardizedFileURL.path {
-            try? data.write(to: sidecarURL, options: [.atomic])
+            try? sidecarData.write(to: sidecarURL, options: [.atomic])
         }
 
         return manifestURL

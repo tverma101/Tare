@@ -5,7 +5,7 @@ MODE="${1:---all}"
 APP_NAME="Tare"
 BUNDLE_ID="com.tejas.Tare"
 MIN_SYSTEM_VERSION="14.0"
-VERSION="${TARE_VERSION:-0.1.4}"
+VERSION="${TARE_VERSION:-0.1.5}"
 
 resolve_signing_identity() {
   if [[ -n "${TARE_CODESIGN_IDENTITY:-}" ]]; then
@@ -57,7 +57,7 @@ case "$ARCH" in
 esac
 
 if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
-  echo "TARE_VERSION must look like 0.1.3, got: $VERSION" >&2
+  echo "TARE_VERSION must look like 0.1.5, got: $VERSION" >&2
   exit 2
 fi
 

@@ -18,6 +18,11 @@ final class TranscriptionStore: ObservableObject {
             UserDefaults.standard.set(createBatchFolder, forKey: Self.createBatchFolderDefaultsKey)
         }
     }
+    @Published var smartTranscriptNamingEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(smartTranscriptNamingEnabled, forKey: Self.smartTranscriptNamingDefaultsKey)
+        }
+    }
     @Published var attachCaptionedVideoToSource: Bool {
         didSet {
             UserDefaults.standard.set(attachCaptionedVideoToSource, forKey: Self.attachCaptionedVideoToSourceDefaultsKey)
@@ -106,6 +111,8 @@ final class TranscriptionStore: ObservableObject {
     @Published var modelOperationModelID: String?
     @Published var modelErrorMessage: String?
     @Published var cloudErrorMessage: String?
+    @Published private(set) var freeLLMAPIKeyConfigured = false
+    @Published private(set) var freeLLMAPIStatusMessage = "Optional: use the local FreeLLMAPI app for compact transcript names."
 
     private let audioExtractor: FFmpegAudioExtractor?
     private let whisperService: WhisperTranscriptionService?
@@ -119,6 +126,8 @@ final class TranscriptionStore: ObservableObject {
     private let modelManager: ModelManagerService?
     private let geminiAPIKeyStore = GeminiAPIKeyStore()
     private let geminiTranscriptionService = GeminiTranscriptionService()
+    private let freeLLMAPIKeyStore = FreeLLMAPIKeyStore()
+    private let transcriptNamingService = TranscriptNamingService()
     private var runTask: Task<Void, Never>?
     private var modelPreparationTask: Task<Void, Never>?
     private var shouldAutoStart = false
@@ -133,6 +142,8 @@ final class TranscriptionStore: ObservableObject {
     private static let autoScanOnLaunchDefaultsKey = "autoScanOnLaunch"
     private static let autoProcessDiscoveredMKVsDefaultsKey = "autoProcessDiscoveredMKVs"
     private static let createBatchFolderDefaultsKey = "createBatchFolder"
+    private static let smartTranscriptNamingDefaultsKey = "smartTranscriptNaming"
+    private static let freeLLMAPIKeyConfiguredDefaultsKey = "freeLLMAPIKeyConfigured"
     private static let attachCaptionedVideoToSourceDefaultsKey = "attachCaptionedVideoToSource"
     private static let localeIdentifierDefaultsKey = "localeIdentifier"
     private static let modelIdentifierDefaultsKey = "modelIdentifier"
@@ -176,6 +187,16 @@ final class TranscriptionStore: ObservableObject {
         } else {
             createBatchFolder = true
         }
+
+        if let rawSmartNaming = environment["TARE_SMART_NAMING"] {
+            smartTranscriptNamingEnabled = rawSmartNaming != "0"
+        } else if UserDefaults.standard.object(forKey: Self.smartTranscriptNamingDefaultsKey) != nil {
+            smartTranscriptNamingEnabled = UserDefaults.standard.bool(forKey: Self.smartTranscriptNamingDefaultsKey)
+        } else {
+            smartTranscriptNamingEnabled = true
+        }
+
+        freeLLMAPIKeyConfigured = UserDefaults.standard.bool(forKey: Self.freeLLMAPIKeyConfiguredDefaultsKey)
 
         attachCaptionedVideoToSource = true
 
@@ -817,7 +838,8 @@ final class TranscriptionStore: ObservableObject {
                 ? 0
                 : Self.automaticChunkSeconds,
             chunkWorkerCount: Self.automaticWorkerCount,
-            geminiOptions: geminiTranscriptionOptions
+            geminiOptions: geminiTranscriptionOptions,
+            smartNamingEnabled: smartTranscriptNamingEnabled
         )
 
         runTask = Task { [weak self] in
@@ -881,6 +903,74 @@ final class TranscriptionStore: ObservableObject {
         let keyStore = geminiAPIKeyStore
         return try await Self.performKeychainWork {
             try keyStore.activeCredentials()
+        }
+    }
+
+    func saveFreeLLMAPIKey(_ rawKey: String) {
+        let keyStore = freeLLMAPIKeyStore
+        Task { @MainActor [weak self] in
+            do {
+                try await Self.performKeychainWork {
+                    try keyStore.save(rawKey)
+                }
+                guard let self else { return }
+                self.freeLLMAPIKeyConfigured = true
+                UserDefaults.standard.set(true, forKey: Self.freeLLMAPIKeyConfiguredDefaultsKey)
+                self.freeLLMAPIStatusMessage = "FreeLLMAPI key saved in macOS Keychain. Tare will call it only while an export is running."
+            } catch {
+                self?.freeLLMAPIStatusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func removeFreeLLMAPIKey() {
+        let keyStore = freeLLMAPIKeyStore
+        Task { @MainActor [weak self] in
+            do {
+                try await Self.performKeychainWork {
+                    try keyStore.delete()
+                }
+                guard let self else { return }
+                self.freeLLMAPIKeyConfigured = false
+                UserDefaults.standard.set(false, forKey: Self.freeLLMAPIKeyConfiguredDefaultsKey)
+                self.freeLLMAPIStatusMessage = "FreeLLMAPI naming disabled until a key is saved."
+            } catch {
+                self?.freeLLMAPIStatusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func refreshFreeLLMAPIStatus() async {
+        // Do not touch the Keychain while the Settings view or app is opening.
+        // The non-secret preference is enough for UI state; the secret is read
+        // once, off the main actor, only when a batch actually starts.
+        freeLLMAPIKeyConfigured = UserDefaults.standard.bool(forKey: Self.freeLLMAPIKeyConfiguredDefaultsKey)
+        if freeLLMAPIKeyConfigured {
+            freeLLMAPIStatusMessage = "Ready for on-demand compact naming. FreeLLMAPI must already be open; Tare never starts a server."
+        } else {
+            freeLLMAPIStatusMessage = "Optional: save a FreeLLMAPI unified key to name transcripts from their contents."
+        }
+    }
+
+    func openFreeLLMAPI() {
+        let appURL = URL(fileURLWithPath: "/Applications/FreeLLMAPI.app")
+        guard FileManager.default.fileExists(atPath: appURL.path) else {
+            freeLLMAPIStatusMessage = "FreeLLMAPI.app was not found in /Applications."
+            return
+        }
+        NSWorkspace.shared.open(appURL)
+        freeLLMAPIStatusMessage = "FreeLLMAPI opened. Tare will use it only during the next export."
+    }
+
+    private func readFreeLLMAPIKey() async -> String? {
+        if let environmentKey = ProcessInfo.processInfo.environment["TARE_FREELLM_API_KEY"],
+           !environmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return environmentKey
+        }
+
+        let keyStore = freeLLMAPIKeyStore
+        return try? await Self.performKeychainWork {
+            try keyStore.load()
         }
     }
 
@@ -1255,6 +1345,8 @@ final class TranscriptionStore: ObservableObject {
             batchGeminiCredentials = nil
         }
 
+        let namingAPIKey = configuration.smartNamingEnabled ? await readFreeLLMAPIKey() : nil
+
         for id in jobIDs {
             if Task.isCancelled {
                 markQueuedJobsCancelled()
@@ -1300,7 +1392,8 @@ final class TranscriptionStore: ObservableObject {
                     let outputURLs = try await exportOutputs(
                         transcript,
                         sourceURL: sourceURL,
-                        configuration: configuration
+                        configuration: configuration,
+                        namingAPIKey: namingAPIKey
                     )
 
                     updateJob(id) { job in
@@ -1390,7 +1483,8 @@ final class TranscriptionStore: ObservableObject {
                 let outputURLs = try await exportOutputs(
                     finalTranscript,
                     sourceURL: sourceURL,
-                    configuration: configuration
+                    configuration: configuration,
+                    namingAPIKey: namingAPIKey
                 )
 
                 updateJob(id) { job in
@@ -1421,8 +1515,29 @@ final class TranscriptionStore: ObservableObject {
     private func exportOutputs(
         _ transcript: Transcript,
         sourceURL: URL,
-        configuration: TranscriptionConfiguration
+        configuration: TranscriptionConfiguration,
+        namingAPIKey: String?
     ) async throws -> [URL] {
+        try Task.checkCancellation()
+
+        let fallbackNaming = TranscriptNamingService.deterministicSuggestion(for: sourceURL)
+        let naming: TranscriptNamingSuggestion
+        if configuration.smartNamingEnabled, let namingAPIKey,
+           let suggestion = await transcriptNamingService.suggestName(
+               for: transcript,
+               sourceURL: sourceURL,
+               apiKey: namingAPIKey
+           ) {
+            naming = suggestion
+        } else {
+            naming = fallbackNaming
+        }
+
+        let transcriptDirectory = try OutputFolderPlanner.createTranscriptDirectory(
+            rootDirectory: configuration.outputDirectory,
+            title: naming.folderName
+        )
+        let baseName = OutputFolderPlanner.sanitizedBaseName(naming.title)
         var outputURLs: [URL] = []
         let exportFormats = configuration.formats.intersection(Self.textSidecarFormats)
 
@@ -1431,25 +1546,34 @@ final class TranscriptionStore: ObservableObject {
                 contentsOf: try await exporter.export(
                     transcript,
                     sourceURL: sourceURL,
-                    to: configuration.outputDirectory,
-                    formats: exportFormats
+                    to: transcriptDirectory,
+                    formats: exportFormats,
+                    baseName: baseName
                 )
             )
         }
 
         let manifestURL = transcriptLinker.manifestURL(
             for: sourceURL,
-            outputDirectory: configuration.outputDirectory
+            outputDirectory: transcriptDirectory,
+            baseName: baseName
         )
-        let linkMetadata = transcriptLinker.metadata(
+        var linkMetadata = transcriptLinker.metadata(
             for: transcript,
             sourceURL: sourceURL,
             transcriptURLs: outputURLs,
             manifestURL: manifestURL,
-            modelIdentifier: configuration.modelIdentifier
+            modelIdentifier: configuration.modelIdentifier,
+            displayName: naming.title,
+            folderName: naming.folderName,
+            namingProvider: naming.provider,
+            namingModelIdentifier: naming.modelIdentifier,
+            namingStrategy: naming.strategy,
+            transcriptDirectoryURL: transcriptDirectory
         )
 
-        if SupportedMedia.videoExtensions.contains(sourceURL.pathExtension.lowercased()),
+        if configuration.attachCaptionedVideoToSource,
+           SupportedMedia.videoExtensions.contains(sourceURL.pathExtension.lowercased()),
            !transcript.segments.isEmpty {
             let attachedVideo = try await captionedVideoExporter.attachToSource(
                 sourceURL: sourceURL,
@@ -1472,6 +1596,7 @@ final class TranscriptionStore: ObservableObject {
             outputURLs.append(attachedAudio.backupURL)
         }
 
+        linkMetadata.transcriptPaths = outputURLs.map { $0.standardizedFileURL.path }
         outputURLs.append(try transcriptLinker.write(linkMetadata))
 
         return outputURLs

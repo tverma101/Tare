@@ -3,7 +3,7 @@ import Foundation
 /// The durable relationship between a source media file and the transcript
 /// artifacts produced for it by Tare.
 public struct TranscriptLinkMetadata: Codable, Hashable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var linkID: UUID
@@ -18,6 +18,14 @@ public struct TranscriptLinkMetadata: Codable, Hashable, Sendable {
     public var modelIdentifier: String
     public var localeIdentifier: String
     public var createdAt: Date
+    /// The compact, human-readable name chosen for this transcript set.
+    /// Optional so manifests written by Tare 0.1.4 remain readable.
+    public var displayName: String?
+    public var folderName: String?
+    public var namingProvider: String?
+    public var namingModelIdentifier: String?
+    public var namingStrategy: String?
+    public var transcriptDirectoryPath: String?
 
     public init(
         schemaVersion: Int = TranscriptLinkMetadata.currentSchemaVersion,
@@ -32,7 +40,13 @@ public struct TranscriptLinkMetadata: Codable, Hashable, Sendable {
         transcriptSHA256: String,
         modelIdentifier: String,
         localeIdentifier: String,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        displayName: String? = nil,
+        folderName: String? = nil,
+        namingProvider: String? = nil,
+        namingModelIdentifier: String? = nil,
+        namingStrategy: String? = nil,
+        transcriptDirectoryPath: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.linkID = linkID
@@ -47,6 +61,12 @@ public struct TranscriptLinkMetadata: Codable, Hashable, Sendable {
         self.modelIdentifier = modelIdentifier
         self.localeIdentifier = localeIdentifier
         self.createdAt = createdAt
+        self.displayName = displayName
+        self.folderName = folderName
+        self.namingProvider = namingProvider
+        self.namingModelIdentifier = namingModelIdentifier
+        self.namingStrategy = namingStrategy
+        self.transcriptDirectoryPath = transcriptDirectoryPath
     }
 
     public var primaryTranscriptPath: String? {

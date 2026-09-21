@@ -80,6 +80,7 @@ public struct TranscriptionConfiguration: Hashable {
     public var chunkSeconds: Int
     public var chunkWorkerCount: Int
     public var geminiOptions: GeminiTranscriptionOptions
+    public var smartNamingEnabled: Bool
 
     public init(
         outputDirectory: URL,
@@ -89,7 +90,8 @@ public struct TranscriptionConfiguration: Hashable {
         attachCaptionedVideoToSource: Bool = true,
         chunkSeconds: Int = 600,
         chunkWorkerCount: Int = 1,
-        geminiOptions: GeminiTranscriptionOptions = .default
+        geminiOptions: GeminiTranscriptionOptions = .default,
+        smartNamingEnabled: Bool = true
     ) {
         self.outputDirectory = outputDirectory
         self.localeIdentifier = localeIdentifier
@@ -99,6 +101,7 @@ public struct TranscriptionConfiguration: Hashable {
         self.chunkSeconds = chunkSeconds
         self.chunkWorkerCount = chunkWorkerCount
         self.geminiOptions = geminiOptions
+        self.smartNamingEnabled = smartNamingEnabled
     }
 
     public var requiresWordTimestamps: Bool {

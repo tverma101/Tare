@@ -12,7 +12,8 @@ transcript artifacts to a folder on the Mac.
 - Local transcription with `ffmpeg` audio extraction, MLX Whisper, the custom Canary-Qwen MLX port, MLX-Audio STT models (Cohere Transcribe, realtime Voxtral, and Qwen3-ASR), the dedicated Voxtral Mini MLX backend, Parakeet v3, and MOSS-Diarize 0.9B.
 - Optional cloud transcription through Google Gemini 3.5 Transcribe, with automatic language detection, Keychain-backed multi-key failover, provider-aware option validation, and automatic safe chunking for long recordings.
 - Every supported input is automatically embedded with its transcription when possible: audio files receive custom lyrics, MKV files are updated with a subtitle track, and MP4/MOV/M4V files produce an IINA-friendly `.captioned.mkv`.
-- Completed exports also write a `.tare-link.json` manifest beside the transcript and a hidden source-side pointer. Supported audio receives a compact link record in standard comment/description metadata in addition to embedded lyrics, so re-importing the source can rediscover its transcript without overwriting earlier exports.
+- Completed exports get a compact subject-based name and their own folder. Tare writes a `.tare-link.json` manifest inside that folder plus a hidden, compact source-side pointer. The pointer records the source fingerprint, every generated artifact, the semantic name, and the naming strategy/model, so re-importing the source can rediscover exactly which transcripts belong to it without overwriting earlier exports.
+- Smart names are optional and on-demand: when the local FreeLLMAPI desktop app is already open, Tare sends a short transcript excerpt to its OpenAI-compatible endpoint and asks a quality-first, benchmark-informed free model for a title and folder name. Tare never starts a background server; if the app is closed, no key is configured, or a request times out, it uses deterministic filename cleanup and still completes the export.
 - The only optional sidecar export in the app is a plain `.txt` text transcript.
 - Model presets include Parakeet v3 for the fastest/lowest-memory path, Qwen3-ASR 1.7B 6-bit for a compact accuracy-focused path, Voxtral Mini 3B 8-bit with a dense encoder for the higher-quality 16-GB path, plus Canary-Qwen 2.5B, Voxtral Small 24B, Cohere Transcribe 2B, Qwen3-ASR 1.7B (BF16 and 8-bit), Voxtral Mini 4B realtime, Whisper Large v3, MOSS-Diarize 0.9B, and the existing smaller/English-only Whisper choices. The default local model remains the faster multilingual base preset.
 - The Models tab discovers supported models already present in the local Hugging Face cache and keeps the normal model picker limited to those models. A collapsed download catalog is available when a new model is needed; the active model is protected from removal.
@@ -54,6 +55,48 @@ The default output root is `~/Documents/Tare Transcripts`. Tare creates that
 folder when the app launches, creates a named subfolder for each batch, shows
 the current destination in the Export panel, and provides a direct Show in
 Finder action.
+
+### Smart transcript names and compact pointers
+
+With **Use smart transcript names** enabled, each source is stored under a
+readable subject folder. A typical result looks like:
+
+```text
+Tare Transcripts/
+  Transcription Batch 2026-09-21 14-30-00 (2 Files)/
+    BIO 111 - Cell Membranes/
+      BIO-111-Cell-Membranes.plain-transcript.txt
+      BIO-111-Cell-Membranes.tare-link.json
+```
+
+The visible manifest is pretty-printed for inspection. The hidden pointer next
+to the original media is compact JSON and contains the source path, size,
+modification time, transcript SHA-256, all output paths, the semantic display
+name/folder, and the provider/model/strategy used for naming. Existing Tare
+1.0 manifests remain readable.
+
+FreeLLMAPI is an optional local desktop app. Paste its unified API key into
+Settings; Tare stores it in the macOS Keychain under
+`com.tejas.Tare.freellmapi` and never writes it to preferences, transcript
+metadata, logs, or the DMG. Tare reads the local FreeLLMAPI port from its
+configuration and makes one short request per completed transcript. It does
+not launch FreeLLMAPI, install a LaunchAgent, or keep a replacement server
+alive. Tare does not read the Keychain while launching or rendering Settings;
+it reads the secret once, off the main actor, when a batch starts. If macOS
+cannot authorize that read silently, Tare skips the provider and uses the
+local filename fallback rather than presenting a modal prompt. The
+environment variables `TARE_FREELLM_URL`, `TARE_FREELLM_MODEL`, and
+`TARE_FREELLM_API_KEY` are available for development/automation overrides; do
+not commit the key.
+
+The model preference is quality-first rather than popularity-first: Tare uses
+the local FreeLLMAPI catalog's intelligence ordering, then tries fast free
+fallbacks when a route is unavailable. Public benchmark suites such as
+[OpenRouter Benchmarks](https://openrouter.ai/benchmarks) and
+[LiveBench](https://livebench.ai/) are useful quality signals, while OpenRouter
+explicitly notes that free-model usage rankings are adoption metrics rather
+than accuracy benchmarks. The live `/v1/models` response remains authoritative
+for availability, and `TARE_FREELLM_MODEL` can pin a known-good route.
 
 ### Google Gemini cloud transcription
 

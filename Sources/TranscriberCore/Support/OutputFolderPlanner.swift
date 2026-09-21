@@ -49,6 +49,20 @@ public enum OutputFolderPlanner {
         return unique
     }
 
+    public static func createTranscriptDirectory(
+        rootDirectory: URL,
+        title: String,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let preferred = rootDirectory.appendingPathComponent(
+            sanitizedFolderName(title),
+            isDirectory: true
+        )
+        let unique = uniqueDirectory(for: preferred, fileManager: fileManager)
+        try fileManager.createDirectory(at: unique, withIntermediateDirectories: true)
+        return unique
+    }
+
     public static func folderName(for sourceURLs: [URL], date: Date = Date()) -> String {
         if sourceURLs.count == 1, let sourceURL = sourceURLs.first {
             return "\(cleanSourceTitle(sourceURL.deletingPathExtension().lastPathComponent)) Transcript"
@@ -79,6 +93,19 @@ public enum OutputFolderPlanner {
             .trimmingCharacters(in: CharacterSet(charactersIn: "-_ "))
 
         return collapsed.isEmpty ? "transcript" : collapsed
+    }
+
+    public static func sanitizedFolderName(_ name: String) -> String {
+        let disallowed = CharacterSet(charactersIn: "/:")
+            .union(.newlines)
+            .union(.controlCharacters)
+        let cleaned = String(name.unicodeScalars.map { scalar in
+            disallowed.contains(scalar) ? Character("-") : Character(scalar)
+        })
+        let collapsed = cleaned
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return collapsed.isEmpty ? "Transcript" : String(collapsed.prefix(120))
     }
 
     private static func uniqueDirectory(for preferred: URL, fileManager: FileManager) -> URL {
