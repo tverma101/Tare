@@ -73,7 +73,7 @@ The visible manifest is pretty-printed for inspection. The hidden pointer next
 to the original media is compact JSON and contains the source path, size,
 modification time, transcript SHA-256, all output paths, the semantic display
 name/folder, and the provider/model/strategy used for naming. Existing Tare
-1.0 manifests remain readable.
+pre-smart-naming manifests remain readable.
 
 FreeLLMAPI is an optional local desktop app. Paste its unified API key into
 Settings; Tare stores it in the macOS Keychain under
