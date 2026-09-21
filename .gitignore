@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+.venv/
+dist/
+DerivedData/
+*.xcuserstate
+*.swp
+__pycache__/
+*.pyc
+.codex/
+benchmarks/
+docs/codex/turn-log.md
