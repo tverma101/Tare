@@ -21,7 +21,7 @@ transcript artifacts to a folder on the Mac.
 - The saved model selection is checked at launch; if it is cached but not runnable on this Mac, Tare selects the first usable local model and reports the recovery.
 - Long videos are split into automatic 10-minute chunks and transcribed one chunk at a time so MLX does not run competing Metal jobs against the same memory pool.
 - Text transcript, model, language, and batch folder choices are saved so repeated runs keep the last selected workflow.
-- Native macOS file picker, drag and drop, settings, menus, and app bundle.
+- The Add Files action uses SwiftUI's native file importer, supports multiple selections, and filters unsupported formats after selection so valid audio remains selectable. Drag and drop, settings, menus, and app bundle.
 - Visible job progress with elapsed time and ETA in the app.
 - The Transcript output panel appears directly below job status, with explicit ready, in-progress, and error states; long finished text scrolls inside the panel.
 - MKV search roots, media-library folder, launch scanning, and automatic found-MKV processing are configurable in Settings.

@@ -61,10 +61,16 @@ struct ContentView: View {
                 }
 
             CloudTranscriptionView(store: store)
-                .tabItem {
-                    Label("Cloud", systemImage: "cloud")
-                }
+            .tabItem {
+                Label("Cloud", systemImage: "cloud")
+            }
         }
+        .fileImporter(
+            isPresented: $store.isFileImporterPresented,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true,
+            onCompletion: store.handleFileImporterResult
+        )
         .alert(
             "Cloud transcription",
             isPresented: Binding(

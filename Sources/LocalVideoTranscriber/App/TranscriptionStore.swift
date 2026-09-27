@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 final class TranscriptionStore: ObservableObject {
     @Published var jobs: [TranscriptionJob] = []
     @Published var selectedJobID: TranscriptionJob.ID?
+    @Published var isFileImporterPresented = false
     @Published var outputDirectory: URL {
         didSet {
             UserDefaults.standard.set(outputDirectory.path, forKey: Self.outputDirectoryDefaultsKey)
@@ -373,15 +374,16 @@ final class TranscriptionStore: ObservableObject {
     }
 
     func presentFilePicker() {
-        let panel = NSOpenPanel()
-        panel.title = "Add Video or Audio"
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = SupportedMedia.contentTypes
+        isFileImporterPresented = true
+    }
 
-        if panel.runModal() == .OK {
-            addFiles(panel.urls)
+    func handleFileImporterResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            addFiles(urls)
+        case .failure(let error):
+            guard (error as? CocoaError)?.code != .userCancelled else { return }
+            statusMessage = "Could not add files: \(error.localizedDescription)"
         }
     }
 
@@ -394,8 +396,9 @@ final class TranscriptionStore: ObservableObject {
         panel.canCreateDirectories = true
         panel.directoryURL = outputDirectory
 
-        if panel.runModal() == .OK, let url = panel.url {
-            outputDirectory = url
+        presentOpenPanel(panel) { [weak self] panel in
+            guard let url = panel.url else { return }
+            self?.outputDirectory = url
         }
     }
 
@@ -408,8 +411,9 @@ final class TranscriptionStore: ObservableObject {
         panel.canCreateDirectories = true
         panel.directoryURL = libraryDirectory
 
-        if panel.runModal() == .OK, let url = panel.url {
-            libraryDirectory = url
+        presentOpenPanel(panel) { [weak self] panel in
+            guard let url = panel.url else { return }
+            self?.libraryDirectory = url
         }
     }
 
@@ -421,12 +425,26 @@ final class TranscriptionStore: ObservableObject {
         panel.canChooseFiles = false
         panel.canCreateDirectories = false
 
-        if panel.runModal() == .OK {
-            let existing = Set(scanRoots.map { $0.standardizedFileURL.path })
+        presentOpenPanel(panel) { [weak self] panel in
+            guard let self else { return }
+            let existing = Set(self.scanRoots.map { $0.standardizedFileURL.path })
             let additions = panel.urls
                 .map(\.standardizedFileURL)
                 .filter { !existing.contains($0.path) }
-            scanRoots.append(contentsOf: additions)
+            self.scanRoots.append(contentsOf: additions)
+        }
+    }
+
+    private func presentOpenPanel(_ panel: NSOpenPanel, onSelection: @escaping (NSOpenPanel) -> Void) {
+        let completionHandler: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK else { return }
+            onSelection(panel)
+        }
+
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: completionHandler)
+        } else {
+            panel.begin(completionHandler: completionHandler)
         }
     }
 
