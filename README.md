@@ -14,7 +14,7 @@ transcript artifacts to a folder on the Mac.
 - Every supported input is automatically embedded with its transcription when possible: audio files receive custom lyrics, MKV files are updated with a subtitle track, and MP4/MOV/M4V files produce an IINA-friendly `.captioned.mkv`.
 - Completed exports get a compact subject-based name and their own folder. Tare writes a `.tare-link.json` manifest inside that folder plus a hidden, compact source-side pointer. The pointer records the source fingerprint, every generated artifact, the semantic name, and the naming strategy/model, so re-importing the source can rediscover exactly which transcripts belong to it without overwriting earlier exports.
 - Smart names are optional and on-demand: when the local FreeLLMAPI desktop app is already open, Tare sends a short transcript excerpt to its OpenAI-compatible endpoint and asks a quality-first, benchmark-informed free model for a title and folder name. Tare never starts a background server; if the app is closed, no key is configured, or a request times out, it uses deterministic filename cleanup and still completes the export.
-- The only optional sidecar export in the app is a plain `.txt` text transcript.
+- Transcript sidecars are chosen in the Export panel: plain text, timestamped text, SRT, VTT, JSON, word timings, Apple Music lyrics, and TTML. Word Timings and TTML are disabled, with the reason, when the selected model does not produce word-level alignment.
 - Model presets include Parakeet v3 for the fastest/lowest-memory path, Qwen3-ASR 1.7B 6-bit for a compact accuracy-focused path, Voxtral Mini 3B 8-bit with a dense encoder for the higher-quality 16-GB path, plus Canary-Qwen 2.5B, Voxtral Small 24B, Cohere Transcribe 2B, Qwen3-ASR 1.7B (BF16 and 8-bit), Voxtral Mini 4B realtime, Whisper Large v3, MOSS-Diarize 0.9B, and the existing smaller/English-only Whisper choices. The default local model remains the faster multilingual base preset.
 - The Models tab discovers supported models already present in the local Hugging Face cache and keeps the normal model picker limited to those models. A collapsed download catalog is available when a new model is needed; the active model is protected from removal.
 - Model readiness includes backend, cache, and device-capacity checks. Canary-Qwen is full precision and needs about 13.3 GiB in one Metal buffer; on a 16 GB M4 it is shown as cached but not runnable, with Parakeet v3 and Qwen3-ASR 1.7B 6-bit offered as safe local choices.
@@ -22,9 +22,9 @@ transcript artifacts to a folder on the Mac.
 - Long videos are split into automatic 10-minute chunks and transcribed one chunk at a time so MLX does not run competing Metal jobs against the same memory pool.
 - Text transcript, model, language, and batch folder choices are saved so repeated runs keep the last selected workflow.
 - The Add Files action uses SwiftUI's native file importer, supports multiple selections, and filters unsupported formats after selection so valid audio remains selectable. Drag and drop, settings, menus, and app bundle.
-- Visible job progress with elapsed time and ETA in the app.
-- The Transcript output panel appears directly below job status, with explicit ready, in-progress, and error states; long finished text scrolls inside the panel.
-- MKV search roots, media-library folder, launch scanning, and automatic found-MKV processing are configurable in Settings.
+- The queue is a table with a state column, type, progress, and a note. Progress reports real per-chunk completion for both local and cloud runs, and the elapsed counter and ETA use monospaced digits in fixed-width slots so nothing jitters as a batch runs.
+- A fixed-height status header and strip show the current state, the active file, and a batch summary. A finished batch reports what it did instead of resetting to `Ready`.
+- MKV search roots and the media-library folder are configurable in Settings, where discovered files can be scanned and names cleaned and organized. Organizing renames and moves files on disk, so Tare lists the affected files and asks first.
 
 ## Backend
 
@@ -215,6 +215,41 @@ Progress logs are written here:
 - `~/Library/Logs/NameClean/quick-action-clean.log`
 - `~/Library/Logs/Tare/quick-action-transcribe.log`
 - `~/Library/Logs/Tare/quick-action-clean-then-transcribe.log`
+
+### Keychain storage
+
+API keys are stored with `SecItem` and are never written to preferences,
+transcript metadata, logs, or a packaged Tare artifact. The store chooses its
+Keychain implementation by probing once with a throwaway write: with a
+`keychain-access-groups` entitlement present, secrets live in the
+data-protection Keychain, where `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` is
+enforced and any secret written by an earlier build is migrated across. Without
+that entitlement, Tare uses the file-based login Keychain instead, because asking
+for the data-protection Keychain without the entitlement fails every call with
+`errSecMissingEntitlement` and would stop a key being saved at all.
+
+A read cannot make that determination — without the entitlement a data-protection
+`SecItemCopyMatching` still reports "not found" — so detection uses an add. The
+probe item is deleted immediately and never holds a secret.
+
+Known boundary: on a build without the entitlement, stored keys remain eligible
+for Keychain backup and iCloud Keychain sync, because the file-based Keychain
+does not honour `kSecAttrAccessible`. Everything else about their handling is
+unchanged. Supplying a valid entitlement requires a `keychain-access-groups`
+entry naming the signing team; `$(AppIdentifierPrefix)` is only substituted when
+a provisioning profile is embedded, so a template entitlements file has to be
+generated per signing team.
+
+## Accessibility
+
+Every job state pairs a distinct symbol shape with required text, so state is
+never conveyed by colour alone and survives greyscale, colour-blindness, and
+Increase Contrast. Colours resolve AppKit semantic colours rather than fixed
+values. The queue table, progress bars, and batch controls carry accessibility
+labels and values; decorative symbols are hidden from VoiceOver. Batch state
+changes are announced, rate limited so a fast batch does not talk over the user.
+The only animation is the progress bar fill, and it respects Reduce Motion.
+`Remove` is `⌘Delete`, Add is `⌘O`, and Start/Cancel is `⌘↩`.
 
 ## Build
 

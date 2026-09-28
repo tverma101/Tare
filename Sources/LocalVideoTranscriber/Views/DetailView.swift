@@ -142,10 +142,16 @@ private struct JobStatusCard: View {
     let job: TranscriptionJob
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let presentation = StatePresentation.forJob(job)
+
+        VStack(alignment: .leading, spacing: Space.close) {
             HStack {
-                Text(job.status.displayName)
-                    .font(.headline)
+                presentation.symbolView(size: 15)
+                    .frame(width: 20, alignment: .center)
+
+                Text(presentation.title)
+                    .font(Typography.sectionHeader)
+                    .foregroundStyle(Palette.textPrimary)
 
                 Spacer()
 
@@ -392,7 +398,7 @@ private struct TranscriptOutputView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let transcript = job.transcript, !transcript.fullText.isEmpty {
+            if let transcript = job.transcript, showsTranscriptText {
                 // No nested scroller: the inner one competed with the page for
                 // scroll events, which made the panels below unreachable while
                 // the pointer was over the text. A long transcript is capped and
@@ -446,23 +452,36 @@ private struct TranscriptOutputView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
+    /// The job's outcome wins over whether text happens to be present: a job
+    /// cancelled during export still holds the transcript it had produced, and
+    /// reporting "Ready" there contradicted the status card.
     private var transcriptState: String {
-        if let transcript = job.transcript, !transcript.fullText.isEmpty {
-            return "Ready"
-        }
-
         switch job.status {
         case .queued:
             return "Not started"
-        case .extractingAudio, .transcribing, .exporting:
+        case .extractingAudio, .transcribing:
             return "In progress"
+        case .exporting:
+            return "Writing files"
         case .failed:
             return "Needs attention"
         case .cancelled:
             return "Cancelled"
         case .completed:
-            return "No text"
+            return hasTranscriptText ? "Ready" : "No text"
         }
+    }
+
+    private var hasTranscriptText: Bool {
+        guard let transcript = job.transcript else { return false }
+        return !transcript.fullText.isEmpty
+    }
+
+    /// Text is only shown for work that is finished or still current, so a
+    /// failed or cancelled run does not present a previous attempt's output as
+    /// this one's result.
+    private var showsTranscriptText: Bool {
+        hasTranscriptText && (job.status == .completed || job.status == .exporting)
     }
 
     private var emptyStateTitle: String {
