@@ -74,6 +74,49 @@ word-timestamp formats gated on model capability.
 over every commit shows nothing, and the scripts no longer contain an absolute
 home path.
 
+## Verification, and what the verification caught
+
+A four-agent verification pass reviewed the change set adversarially, then a
+fifth pass reviewed the fixes. It found one P0 that the overhaul itself
+introduced, plus several P1 issues, and a second P0 that the *fix* for the first
+introduced. Both are recorded because the pattern is the lesson, not the bugs.
+
+**The chunk-progress parser read digits, not numbers.** `String.compactMap`
+iterates characters, so `Finished chunk 12/12 (100%)` reported 1 of 2: the bar
+pinned at 86%, the ETA became a fraction of elapsed time, and the counter read
+"Chunk 1 of 2". Reachable on any source over 90 minutes. It passed a clean build
+and the whole smoke suite, because nothing covered it. The parse is now table
+tested, and the test was confirmed to fail against the old implementation.
+
+**A fix wedged the app.** The format guard was placed after `isRunning = true`.
+A refusal returned without clearing it, and since `runBatch`'s `defer` is the
+only writer that clears the flag, the app stayed wedged — button reading Cancel,
+pressing it doing nothing, recovery only by relaunch. Any `return` placed between
+a state flag being set and the work that clears it is a wedge; the guard now runs
+before both the flag and the directory creation, and `canStart` agrees.
+
+**Gating `canStart` on the format created a dead end**: the message explaining
+why sat behind the gate, so a disabled Start had no visible reason. The
+explanation moved to the panel where the choice is made.
+
+**A "structural" redaction guarantee was not one.** Redaction was applied in
+`truncated`, but `safeProviderMessage` and a direct
+`job.errorMessage = error.localizedDescription` bypassed it, and a mock that
+echoed a key in an error body put it on screen. Redaction is now applied at every
+hop and is public API rather than a test-only shim.
+
+Rules that came out of this and are worth keeping:
+
+- A smoke test that exercises a test-only shim cannot catch a bypass in the
+  production path. The redaction test needed to call the real function.
+- A test that only passes on single-digit inputs would have missed the parser
+  bug entirely; `3/7 (42%)` parses identically under both implementations.
+- `DispatchGroup` gives a happens-before edge, so a locked reference box
+  published to a `notify` block is race-free where a captured `var` is a Swift 6
+  error.
+- Verifying a fix matters more than verifying the original. Two of the three
+  worst defects here were introduced *by* a fix.
+
 ## Not verified
 
 No UI was run. Layout claims — the `ViewThatFits` switchover points, the table
