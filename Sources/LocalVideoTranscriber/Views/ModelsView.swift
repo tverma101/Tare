@@ -4,6 +4,7 @@ import TranscriberCore
 struct ModelsView: View {
     @ObservedObject var store: TranscriptionStore
     @State private var isShowingDownloadCatalog = false
+    @State private var modelPendingRemoval: WhisperModelPreset?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -42,7 +43,7 @@ struct ModelsView: View {
                     }
 
                     if !store.downloadableModelPresets.isEmpty {
-                        DisclosureGroup("Download another model", isExpanded: $isShowingDownloadCatalog) {
+                        DisclosureGroup("Download another model (\(store.downloadableModelPresets.count) available)", isExpanded: $isShowingDownloadCatalog) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Downloads go to your existing Hugging Face cache. Tare never puts model files in the app or DMG.")
                                     .font(.caption)
@@ -78,6 +79,23 @@ struct ModelsView: View {
             Button("OK") { store.modelErrorMessage = nil }
         } message: {
             Text(store.modelErrorMessage ?? "Tare could not inspect the local model cache.")
+        }
+        .confirmationDialog(
+            "Delete cached model files?",
+            isPresented: Binding(
+                get: { modelPendingRemoval != nil },
+                set: { if !$0 { modelPendingRemoval = nil } }
+            ),
+            presenting: modelPendingRemoval
+        ) { preset in
+            Button("Delete \(preset.displayName)", role: .destructive) {
+                modelPendingRemoval = nil
+                Task { await store.removeModel(preset) }
+            }
+            Button("Cancel", role: .cancel) { modelPendingRemoval = nil }
+        } message: { preset in
+            let size = store.modelStatus(for: preset)?.sizeDescription ?? "several GB"
+            Text("Tare will delete \(size) of cached files for \(preset.displayName) from your Hugging Face cache. This cannot be undone, and you will need to download the model again.")
         }
     }
 
@@ -146,6 +164,7 @@ struct ModelsView: View {
     private func localModelRow(for preset: WhisperModelPreset) -> some View {
         let status = store.modelStatus(for: preset)
         let isActive = store.isActiveModel(preset)
+        let isRequired = store.isRequiredModel(preset)
         let isBusy = store.modelOperationModelID == preset.id
 
         return HStack(spacing: 12) {
@@ -161,6 +180,10 @@ struct ModelsView: View {
                         Text("In use")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.tint)
+                    } else if isRequired {
+                        Text("Needed for this language")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Text(preset.detail)
@@ -180,25 +203,48 @@ struct ModelsView: View {
                     .controlSize(.small)
             }
 
-            Button("Remove") {
-                Task { await store.removeModel(preset) }
+            Button("Use") {
+                store.selectModel(preset)
             }
             .disabled(store.modelOperation != nil || isActive)
-            .help(isActive ? "Choose another model before removing this one" : "Remove this model from the local Hugging Face cache")
+            .help(isActive ? "\(preset.displayName) is the selected model" : "Select \(preset.displayName) for the next batch")
+
+            Button("Remove", role: .destructive) {
+                modelPendingRemoval = preset
+            }
+            .disabled(store.modelOperation != nil || store.isRefreshingModels || isRequired)
+            .help(removalHelp(for: preset, isRequired: isRequired))
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func removalHelp(for preset: WhisperModelPreset, isRequired: Bool) -> String {
+        if isRequired {
+            return preset.id == store.modelIdentifier
+                ? "Choose another model before removing this one"
+                : "The current language setting needs this model. Change the model or language before removing it."
+        }
+        return "Delete the cached files for \(preset.displayName). You will need to download it again."
     }
 
     private func downloadModelRow(for preset: WhisperModelPreset) -> some View {
         let status = store.modelStatus(for: preset)
         let needsRepair = status?.isAvailable == true && status?.isUsable != true
         let isActive = store.isActiveModel(preset)
+        let isRequired = store.isRequiredModel(preset)
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(preset.displayName)
-                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 8) {
+                    Text(preset.displayName)
+                        .font(.subheadline.weight(.semibold))
+                    if isActive {
+                        Text("In use")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tint)
+                    }
+                }
                 Text(preset.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -212,15 +258,22 @@ struct ModelsView: View {
             Spacer()
 
             if needsRepair {
-                Button("Remove") {
-                    Task { await store.removeModel(preset) }
+                Button("Re-download") {
+                    Task { await store.downloadModel(preset) }
                 }
-                .disabled(store.modelOperation != nil || isActive)
+                .disabled(store.modelOperation != nil || store.isRefreshingModels)
+                .help("Download the missing files again")
+
+                Button("Remove", role: .destructive) {
+                    modelPendingRemoval = preset
+                }
+                .disabled(store.modelOperation != nil || store.isRefreshingModels || isRequired)
+                .help("Delete the incomplete cache entry so Tare can download it again")
             } else {
                 Button("Download") {
                     Task { await store.downloadModel(preset) }
                 }
-                .disabled(store.modelOperation != nil)
+                .disabled(store.modelOperation != nil || store.isRefreshingModels)
             }
         }
         .padding(.vertical, 4)

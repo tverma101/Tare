@@ -170,6 +170,63 @@ public final class TranscriptLinker {
         return nil
     }
 
+    /// Finds links for several sources at once, listing each parent directory a
+    /// single time instead of once per file.
+    ///
+    /// Importing a large folder would otherwise repeat the same directory
+    /// enumeration and pointer decode for every file in it.
+    public func existingLinks(for sourceURLs: [URL]) -> [URL: TranscriptLinkMetadata] {
+        let sourcesByDirectory = Dictionary(grouping: sourceURLs) {
+            $0.deletingLastPathComponent().standardizedFileURL.path
+        }
+
+        var candidatesByDirectory: [String: [URL]] = [:]
+        for (directory, sources) in sourcesByDirectory {
+            var candidates = sources.map { sourceSidecarURL(for: $0) }
+
+            if let contents = try? fileManager.contentsOfDirectory(
+                at: URL(fileURLWithPath: directory),
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) {
+                candidates.append(contentsOf: contents.filter {
+                    $0.pathExtension.lowercased() == "json"
+                        && $0.lastPathComponent.hasSuffix(".tare-link.json")
+                })
+            }
+
+            candidatesByDirectory[directory] = candidates
+        }
+
+        var resolved: [URL: TranscriptLinkMetadata] = [:]
+        for (directory, sources) in sourcesByDirectory {
+            let candidates = candidatesByDirectory[directory] ?? []
+
+            for sourceURL in sources {
+                let sourcePath = sourceURL.standardizedFileURL.path
+                var seenPaths = Set<String>()
+
+                for candidate in candidates {
+                    let candidatePath = candidate.standardizedFileURL.path
+                    guard seenPaths.insert(candidatePath).inserted else { continue }
+                    guard let data = try? Data(contentsOf: candidate),
+                          let metadata = try? decoder.decode(TranscriptLinkMetadata.self, from: data),
+                          metadata.schemaVersion <= TranscriptLinkMetadata.currentSchemaVersion else {
+                        continue
+                    }
+
+                    let samePath = metadata.sourcePath == sourcePath
+                    let sameName = metadata.sourceName.caseInsensitiveCompare(sourceURL.lastPathComponent) == .orderedSame
+                    guard samePath || sameName else { continue }
+                    resolved[sourceURL] = metadata
+                    break
+                }
+            }
+        }
+
+        return resolved
+    }
+
     public static func audioMetadataComment(for metadata: TranscriptLinkMetadata) -> String {
         "Tare transcript link \(metadata.linkID.uuidString)"
     }

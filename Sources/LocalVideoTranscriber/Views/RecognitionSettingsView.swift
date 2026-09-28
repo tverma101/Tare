@@ -6,6 +6,19 @@ struct RecognitionSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let selectionError = store.modelSelectionErrorMessage {
+                Label {
+                    Text(selectionError)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+                .foregroundStyle(.red)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            }
+
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Picker("Model", selection: $store.modelIdentifier) {
                     if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),

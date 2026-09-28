@@ -111,6 +111,10 @@ final class TranscriptionStore: ObservableObject {
     @Published var modelOperation: String?
     @Published var modelOperationModelID: String?
     @Published var modelErrorMessage: String?
+    /// Raised by pressing Start on the Transcribe tab. It is rendered inline
+    /// there rather than in the Models tab alert, so the reason a batch refused
+    /// to start is visible where the user pressed the button.
+    @Published var modelSelectionErrorMessage: String?
     @Published var cloudErrorMessage: String?
     @Published private(set) var freeLLMAPIKeyConfigured = false
     @Published private(set) var freeLLMAPIStatusMessage = "Optional: use the local FreeLLMAPI app for compact transcript names."
@@ -463,18 +467,52 @@ final class TranscriptionStore: ObservableObject {
             return
         }
 
-        let newJobs = supported.map { sourceURL -> TranscriptionJob in
-            var job = TranscriptionJob(sourceURL: sourceURL)
-            job.linkedTranscriptURL = transcriptLinker.existingLink(for: sourceURL)?.primaryTranscriptURL
-            return job
-        }
+        let newJobs = supported.map { TranscriptionJob(sourceURL: $0) }
         jobs.append(contentsOf: newJobs)
         selectedJobID = selectedJobID ?? newJobs.first?.id
-        let linkedCount = newJobs.filter { $0.linkedTranscriptURL != nil }.count
-        if linkedCount > 0 {
-            statusMessage = "\(newJobs.count) file\(newJobs.count == 1 ? "" : "s") added; \(linkedCount) linked transcript\(linkedCount == 1 ? "" : "s") found"
-        } else {
-            statusMessage = "\(newJobs.count) file\(newJobs.count == 1 ? "" : "s") added"
+        let addedCount = newJobs.count
+        let addMessage = "\(addedCount) file\(addedCount == 1 ? "" : "s") added"
+        statusMessage = addMessage
+        resolveLinkedTranscripts(for: newJobs.map(\.id), addedCount: addedCount, pendingMessage: addMessage)
+    }
+
+    /// Discovers existing transcript links off the main actor.
+    ///
+    /// The lookup reads and decodes JSON beside each source, so doing it inline
+    /// froze the window for every file added.
+    private func resolveLinkedTranscripts(
+        for ids: [TranscriptionJob.ID],
+        addedCount: Int,
+        pendingMessage: String
+    ) {
+        let sourcesByID = Dictionary(
+            uniqueKeysWithValues: ids.compactMap { id in
+                jobs.first(where: { $0.id == id }).map { (id, $0.sourceURL) }
+            }
+        )
+        guard !sourcesByID.isEmpty else { return }
+
+        Task { [weak self] in
+            let sources = Array(sourcesByID.values)
+            let metadataBySource = await Task.detached(priority: .userInitiated) {
+                TranscriptLinker().existingLinks(for: sources)
+            }.value
+
+            let linkedByID = sourcesByID.reduce(into: [TranscriptionJob.ID: URL]()) { result, entry in
+                if let transcriptURL = metadataBySource[entry.value]?.primaryTranscriptURL {
+                    result[entry.key] = transcriptURL
+                }
+            }
+
+            guard let self, !linkedByID.isEmpty else { return }
+            for (id, transcriptURL) in linkedByID {
+                self.updateJob(id) { $0.linkedTranscriptURL = transcriptURL }
+            }
+            // A caller such as the MKV scan reports its own result immediately
+            // after adding files, so only claim the status line if it is still ours.
+            guard self.statusMessage == pendingMessage else { return }
+            let linkedCount = linkedByID.count
+            self.statusMessage = "\(addedCount) file\(addedCount == 1 ? "" : "s") added; \(linkedCount) linked transcript\(linkedCount == 1 ? "" : "s") found"
         }
     }
 
@@ -714,6 +752,7 @@ final class TranscriptionStore: ObservableObject {
         if WhisperModelPreset.preset(for: effectiveModelIdentifier) != nil {
             isPreparingModel = true
             modelErrorMessage = nil
+            modelSelectionErrorMessage = nil
             statusMessage = "Checking model availability…"
             modelPreparationTask = Task { @MainActor [weak self] in
                 await self?.preflightAndStartBatch(
@@ -792,7 +831,7 @@ final class TranscriptionStore: ObservableObject {
 
         guard let modelManager else {
             statusMessage = "Could not verify \(preset.displayName). Repair the model backend in Models."
-            modelErrorMessage = ModelManagerError.pythonMissing.localizedDescription
+            modelSelectionErrorMessage = ModelManagerError.pythonMissing.localizedDescription
             return
         }
 
@@ -802,7 +841,7 @@ final class TranscriptionStore: ObservableObject {
 
             guard status.isUsable else {
                 statusMessage = "\(preset.displayName) is not ready on this Mac"
-                modelErrorMessage = status.issueMessage ?? "The cached model cannot run on this Mac. Choose another available model."
+                modelSelectionErrorMessage = status.issueMessage ?? "The cached model cannot run on this Mac. Choose another available model."
                 return
             }
         } catch is CancellationError {
@@ -810,7 +849,7 @@ final class TranscriptionStore: ObservableObject {
             return
         } catch {
             statusMessage = "Could not verify \(preset.displayName)"
-            modelErrorMessage = error.localizedDescription
+            modelSelectionErrorMessage = error.localizedDescription
             return
         }
 
@@ -1173,13 +1212,25 @@ final class TranscriptionStore: ObservableObject {
         }
     }
 
+    /// The preset the user actually selected.
     func isActiveModel(_ preset: WhisperModelPreset) -> Bool {
+        modelIdentifier == preset.id
+    }
+
+    /// Every preset that must stay on disk for the current selection to run.
+    ///
+    /// An English language setting resolves the multilingual Whisper base, small
+    /// and tiny models to their `.en` counterparts, so a second model becomes
+    /// load-bearing even though the user never picked it. It is protected from
+    /// removal, but it is not the selection.
+    func isRequiredModel(_ preset: WhisperModelPreset) -> Bool {
+        if isActiveModel(preset) { return true }
         let languageCode = WhisperTranscriptionService.languageCode(from: localeIdentifier)
         let effectiveIdentifier = WhisperModelPreset.optimizedIdentifier(
             modelIdentifier,
             languageCode: languageCode
         )
-        return modelIdentifier == preset.id || effectiveIdentifier == preset.id
+        return effectiveIdentifier == preset.id
     }
 
     func selectModel(_ preset: WhisperModelPreset) {
@@ -1188,6 +1239,9 @@ final class TranscriptionStore: ObservableObject {
     }
 
     func refreshModelStatuses() async {
+        // A second concurrent inventory would race the first and could publish a
+        // stale snapshot over a download that finished in the meantime.
+        guard !isRefreshingModels else { return }
         guard let modelManager else {
             modelErrorMessage = ModelManagerError.pythonMissing.localizedDescription
             return
@@ -1200,7 +1254,19 @@ final class TranscriptionStore: ObservableObject {
             let knownModelIDs = Set(WhisperModelPreset.local.map(\.id))
             let localStatuses = try await modelManager.localModels()
                 .filter { knownModelIDs.contains($0.modelIdentifier) && $0.isAvailable }
-            modelStatuses = Dictionary(uniqueKeysWithValues: localStatuses.map { ($0.modelIdentifier, $0) })
+
+            // Merge rather than replace: an entry this scan did not observe may
+            // already reflect a completed download or removal.
+            var merged = modelStatuses
+            for status in localStatuses {
+                merged[status.modelIdentifier] = status
+            }
+            let scannedIDs = Set(localStatuses.map(\.modelIdentifier))
+            for identifier in modelStatuses.keys
+            where !scannedIDs.contains(identifier) && identifier != modelOperationModelID {
+                merged.removeValue(forKey: identifier)
+            }
+            modelStatuses = merged
 
             if shouldSelectFirstLocalModel,
                let firstLocalPreset = Self.localModelSelectionOrder.first(where: { modelStatuses[$0.id]?.isUsable == true }) {
@@ -1258,18 +1324,9 @@ final class TranscriptionStore: ObservableObject {
         }
     }
 
-    func installModel(_ preset: WhisperModelPreset) async {
-        await performModelOperation("Installing \(preset.displayName)", preset: preset) { modelManager in
-            try await modelManager.install(modelIdentifier: preset.id)
-        }
-        if modelErrorMessage == nil, modelOperation == nil {
-            selectModel(preset)
-        }
-    }
-
     func removeModel(_ preset: WhisperModelPreset) async {
-        guard !isActiveModel(preset) else {
-            modelErrorMessage = "Tare cannot remove the active model. Install or select another model first."
+        guard !isRequiredModel(preset) else {
+            modelErrorMessage = "Tare cannot remove \(preset.id == modelIdentifier ? "the active model" : "a model the current language setting needs"). Select another model first."
             return
         }
 
@@ -1521,6 +1578,18 @@ final class TranscriptionStore: ObservableObject {
                 markQueuedJobsCancelled()
                 return
             } catch {
+                // Tearing down a subprocess surfaces as a non-zero exit rather
+                // than a CancellationError, so a user-initiated cancel would
+                // otherwise be reported as a failure with a raw exit code.
+                guard !Task.isCancelled else {
+                    updateJob(id) { job in
+                        job.status = .cancelled
+                        job.errorMessage = "Cancelled"
+                        job.completedAt = Date()
+                    }
+                    markQueuedJobsCancelled()
+                    return
+                }
                 updateJob(id) { job in
                     job.status = .failed
                     job.errorMessage = error.localizedDescription

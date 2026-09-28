@@ -137,10 +137,6 @@ public final class ModelManagerService {
         try await run(action: "download", modelIdentifier: modelIdentifier)
     }
 
-    public func install(modelIdentifier: String) async throws -> ModelStatus {
-        try await run(action: "install", modelIdentifier: modelIdentifier)
-    }
-
     public func remove(modelIdentifier: String) async throws -> ModelStatus {
         try await run(action: "remove", modelIdentifier: modelIdentifier)
     }

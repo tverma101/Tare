@@ -365,6 +365,8 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         var lastError: Error?
 
         for offset in 0..<credentials.count {
+            try Task.checkCancellation()
+
             let credentialIndex = (startingCredentialIndex + offset) % credentials.count
             let credential = credentials[credentialIndex]
 
@@ -384,6 +386,7 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
                     throw map(error)
                 }
             } catch let error as URLError {
+                guard error.code != .cancelled else { throw CancellationError() }
                 lastError = error
             } catch {
                 throw error
