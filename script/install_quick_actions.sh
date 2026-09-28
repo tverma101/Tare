@@ -19,19 +19,23 @@ cp "$ROOT_DIR/script/mlx_transcribe.py" "$TRANSCRIBER_SUPPORT_DIR/mlx_transcribe
 chmod +x "$TRANSCRIBER_SUPPORT_DIR/TranscriberBatch"
 
 CLEANER_SOURCE=""
-for candidate in \
-  "$HOME/Name Clean/NameCleanApp/clean-name-cli.py" \
-  "$HOME/Experiemnts/NameCleanApp/clean-name-cli.py" \
-  "$NAMECLEAN_SUPPORT_DIR/clean-name-cli.py"
-do
-  if [[ -f "$candidate" ]]; then
-    CLEANER_SOURCE="$candidate"
-    break
-  fi
-done
+if [[ -n "${TARE_NAME_CLEAN_CLI:-}" && -f "$TARE_NAME_CLEAN_CLI" ]]; then
+  CLEANER_SOURCE="$TARE_NAME_CLEAN_CLI"
+else
+  for candidate in \
+    "$HOME/Name Clean/NameCleanApp/clean-name-cli.py" \
+    "$HOME/Projects/Experiments/NameCleanApp/clean-name-cli.py" \
+    "$NAMECLEAN_SUPPORT_DIR/clean-name-cli.py"
+  do
+    if [[ -f "$candidate" ]]; then
+      CLEANER_SOURCE="$candidate"
+      break
+    fi
+  done
+fi
 
 if [[ -z "$CLEANER_SOURCE" ]]; then
-  echo "Could not find clean-name-cli.py. Expected it in Name Clean, Experiemnts, or Application Support." >&2
+  echo "Could not find clean-name-cli.py. Set TARE_NAME_CLEAN_CLI, or place it under Name Clean, Projects/Experiments, or Application Support." >&2
   exit 1
 fi
 

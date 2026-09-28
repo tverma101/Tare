@@ -9,4 +9,6 @@ __pycache__/
 *.pyc
 .codex/
 benchmarks/
-docs/codex/turn-log.md
+docs/codex/
+docs/ux/
+.swiftpm/

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLEANER="/Users/tejas/Name Clean/NameCleanApp/clean-name-cli.py"
+CLEANER="${TARE_NAME_CLEAN_CLI:-$HOME/Library/Application Support/NameClean/clean-name-cli.py}"
 LOG_DIR="$HOME/Library/Logs/NameClean"
 LOG_FILE="$LOG_DIR/quick-action-clean.log"
 

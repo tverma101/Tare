@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CLEANER="/Users/tejas/Name Clean/NameCleanApp/clean-name-cli.py"
+CLEANER="${TARE_NAME_CLEAN_CLI:-$HOME/Library/Application Support/NameClean/clean-name-cli.py}"
 OUTPUT_DIR="${TARE_OUTPUT_DIR:-}"
 LOG_DIR="$HOME/Library/Logs/Tare"
 LOG_FILE="$LOG_DIR/quick-action-clean-then-transcribe.log"
