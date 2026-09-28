@@ -272,12 +272,11 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         }
     }
 
-    /// Removes credential-shaped text from a provider-controlled string.
+    /// Strips credential-shaped content from provider-controlled text.
     ///
     /// Tare never places a key in a request body, so this is defence in depth:
     /// a provider error message is echoed into the UI, and nothing should be able
     /// to make that echo a secret.
-    /// Strips credential-shaped content from provider-controlled text.
     ///
     /// Public so the store can apply it as a final guarantee before an error
     /// reaches the screen, independent of which error type produced it.
@@ -1496,10 +1495,21 @@ private struct GeminiWord: Hashable {
     let speaker: String?
 }
 
-private struct GeminiHTTPError: Error {
+private struct GeminiHTTPError: Error, LocalizedError {
     let statusCode: Int
     let code: String?
     let message: String
+
+    /// Without this, a raw HTTP failure that escapes `checkHTTP` — for example a
+    /// 5xx raised by the retry wrapper — reaches the user as Foundation's
+    /// default "error 1" description.
+    var errorDescription: String? {
+        let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if detail.isEmpty {
+            return "Google Gemini returned HTTP \(statusCode)."
+        }
+        return "Google Gemini returned HTTP \(statusCode): \(detail)"
+    }
 
     var isRetryable: Bool {
         statusCode == 408 || statusCode == 429 || statusCode >= 500

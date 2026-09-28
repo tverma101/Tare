@@ -324,6 +324,18 @@ private struct ExportOptionsView: View {
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
 
+                // Start is disabled while nothing is selected, so the reason has
+                // to live here rather than in a message that can never appear.
+                if !isUsableFormatSelection(store.selectedFormats) {
+                    Label(
+                        "Select at least one transcript file to start a batch.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
                 ForEach(ExportFormat.visibleManualFormats) { format in
                     Toggle(isOn: formatBinding(format)) {
                         Text(format.displayName)

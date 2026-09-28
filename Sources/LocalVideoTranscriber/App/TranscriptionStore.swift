@@ -1086,6 +1086,11 @@ final class TranscriptionStore: ObservableObject {
         geminiCredentials: [GeminiAPIKeyCredential]? = nil
     ) {
 
+        // Cleared per batch as well as per job: the notice is rendered on the
+        // Cloud tab for as long as it is set, and a batch that never reads its
+        // credentials would otherwise leave the last one on screen.
+        geminiCredentialFailureMessage = nil
+
         // Checked before anything is created and before isRunning is set: a
         // refusal after that point would leave the flag stuck, because
         // runBatch's defer is the only thing that clears it.
@@ -1654,6 +1659,10 @@ final class TranscriptionStore: ObservableObject {
         configuration: TranscriptionConfiguration,
         geminiCredentials: [GeminiAPIKeyCredential]? = nil
     ) async {
+        // Set here as well as per job, so an early return — a credential read
+        // that throws, say — cannot leave the previous batch's notice showing.
+        geminiCredentialFailureMessage = nil
+
         defer {
             isRunning = false
             runTask = nil
@@ -1707,6 +1716,7 @@ final class TranscriptionStore: ObservableObject {
         }
 
         let namingAPIKey = configuration.smartNamingEnabled ? await readFreeLLMAPIKey() : nil
+
 
         for (index, id) in jobIDs.enumerated() {
             if Task.isCancelled {
