@@ -226,7 +226,23 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
     }
 
     private func secret(for id: UUID) throws -> String? {
-        var query = baseQuery(for: id)
+        if let value = try readSecret(for: id, dataProtection: KeychainBackend.usesDataProtection) {
+            return value
+        }
+
+        // A secret saved before this build used the data-protection Keychain is
+        // still in the legacy one. Move it across so it stops being eligible for
+        // Keychain backup, then answer from the new location.
+        guard KeychainBackend.usesDataProtection else { return nil }
+        guard let legacy = try readSecret(for: id, dataProtection: false) else { return nil }
+
+        try writeSecret(legacy, for: id)
+        try? deleteSecret(for: id, dataProtection: false)
+        return legacy
+    }
+
+    private func readSecret(for id: UUID, dataProtection: Bool) throws -> String? {
+        var query = baseQuery(for: id, dataProtection: dataProtection)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -245,29 +261,50 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
 
     private func writeSecret(_ value: String, for id: UUID) throws {
         let data = Data(value.utf8)
-        var query = baseQuery(for: id)
+        var query = baseQuery(for: id, dataProtection: KeychainBackend.usesDataProtection)
         query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        query[kSecAttrAccessible as String] = KeychainBackend.secretAccessibility
+        query[kSecAttrLabel as String] = "Tare Gemini API key"
 
-        let status = SecItemAdd(query as CFDictionary, nil)
+        var status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            let attributes: [String: Any] = [
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: KeychainBackend.secretAccessibility
+            ]
+            status = SecItemUpdate(
+                baseQuery(for: id, dataProtection: KeychainBackend.usesDataProtection) as CFDictionary,
+                attributes as CFDictionary
+            )
+        }
         guard status == errSecSuccess else {
             throw GeminiAPIKeyStoreError.keychainFailure(status)
         }
     }
 
     private func deleteSecret(for id: UUID) throws {
-        let status = SecItemDelete(baseQuery(for: id) as CFDictionary)
+        try deleteSecret(for: id, dataProtection: KeychainBackend.usesDataProtection)
+    }
+
+    private func deleteSecret(for id: UUID, dataProtection: Bool) throws {
+        let status = SecItemDelete(baseQuery(for: id, dataProtection: dataProtection) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw GeminiAPIKeyStoreError.keychainFailure(status)
         }
     }
 
-    private func baseQuery(for id: UUID) -> [String: Any] {
-        [
+    private func baseQuery(for id: UUID, dataProtection: Bool? = nil) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecAttrAccount as String: id.uuidString
         ]
+        if let dataProtection {
+            KeychainBackend.applying(dataProtection, to: &query)
+        } else {
+            KeychainBackend.applying(to: &query)
+        }
+        return query
     }
 
     private func save(_ records: [GeminiAPIKeyRecord]) throws {

@@ -19,7 +19,22 @@ public final class FreeLLMAPIKeyStore: @unchecked Sendable {
     }
 
     public func load() throws -> String? {
-        var query = baseQuery(suppressAuthenticationUI: true)
+        if let value = try readSecret(dataProtection: KeychainBackend.usesDataProtection) {
+            return value
+        }
+
+        // Migrate a key saved before this build used the data-protection
+        // Keychain, so it stops being eligible for Keychain backup.
+        guard KeychainBackend.usesDataProtection else { return nil }
+        guard let legacy = try readSecret(dataProtection: false) else { return nil }
+
+        try save(legacy)
+        try? delete(dataProtection: false)
+        return legacy
+    }
+
+    private func readSecret(dataProtection: Bool) throws -> String? {
+        var query = baseQuery(suppressAuthenticationUI: true, dataProtection: dataProtection)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         // Export-time reads must never put up a modal Keychain prompt. A
@@ -54,7 +69,8 @@ public final class FreeLLMAPIKeyStore: @unchecked Sendable {
         let data = Data(key.utf8)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecAttrAccessible as String: KeychainBackend.secretAccessibility,
+            kSecAttrLabel as String: "Tare FreeLLMAPI key"
         ]
         let updateStatus = SecItemUpdate(
             baseQuery(suppressAuthenticationUI: true) as CFDictionary,
@@ -74,13 +90,22 @@ public final class FreeLLMAPIKeyStore: @unchecked Sendable {
     }
 
     public func delete() throws {
-        let status = SecItemDelete(baseQuery(suppressAuthenticationUI: true) as CFDictionary)
+        try delete(dataProtection: KeychainBackend.usesDataProtection)
+    }
+
+    private func delete(dataProtection: Bool) throws {
+        let status = SecItemDelete(
+            baseQuery(suppressAuthenticationUI: true, dataProtection: dataProtection) as CFDictionary
+        )
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw FreeLLMAPIKeyStoreError.keychainFailure(status)
         }
     }
 
-    private func baseQuery(suppressAuthenticationUI: Bool = false) -> [String: Any] {
+    private func baseQuery(
+        suppressAuthenticationUI: Bool = false,
+        dataProtection: Bool? = nil
+    ) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -88,6 +113,11 @@ public final class FreeLLMAPIKeyStore: @unchecked Sendable {
         ]
         if suppressAuthenticationUI {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+        }
+        if let dataProtection {
+            KeychainBackend.applying(dataProtection, to: &query)
+        } else {
+            KeychainBackend.applying(to: &query)
         }
         return query
     }
