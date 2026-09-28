@@ -64,9 +64,9 @@ readable subject folder. A typical result looks like:
 ```text
 Tare Transcripts/
   Transcription Batch 2026-09-21 14-30-00 (2 Files)/
-    BIO 111 - Cell Membranes/
-      BIO-111-Cell-Membranes.plain-transcript.txt
-      BIO-111-Cell-Membranes.tare-link.json
+    Cell Biology - Lecture 04/
+      Cell-Biology-Lecture-04.plain-transcript.txt
+      Cell-Biology-Lecture-04.tare-link.json
 ```
 
 The visible manifest is pretty-printed for inspection. The hidden pointer next
@@ -233,3 +233,11 @@ checksum. The DMG contains one `Tare.app` and an `Applications` shortcut.
 Installation replaces only the canonical `/Applications/Tare.app`; any prior
 bundle is moved to the user's Trash for recovery, and no second app bundle is
 left in `dist/`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+Model weights are never redistributed with this project. Tare discovers models
+already present in your own Hugging Face cache, and the release DMG contains
+only the app and, for a provisioned checkout, the Python runtime.
