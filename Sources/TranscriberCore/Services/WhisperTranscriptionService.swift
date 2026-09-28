@@ -173,21 +173,39 @@ public final class WhisperTranscriptionService {
     /// per-chunk progress instead of extrapolating from a fixed fraction.
     ///
     /// The script writes `Chunked transcription: N chunks, ...` once, then
-    /// `Finished chunk i/N (P%)` per chunk, both to stderr.
+    /// `Finished chunk i/N (P%)` per chunk, both to stderr. The counts are
+    /// matched as whole numbers rather than read as loose digits, because
+    /// `Finished chunk 12/12 (100%)` contains seven digit characters and taking
+    /// the first two would report 1 of 2.
+    /// Extracts `i` and `N` from a `Finished chunk i/N (P%)` line.
+    ///
+    /// The counts are read as whole numbers, not as loose digit characters,
+    /// because the line also contains a percentage and a two-digit chunk index.
+    public static func parseChunkProgressLine(_ line: String) -> (completed: Int, total: Int)? {
+        let prefix = "Finished chunk "
+        guard line.hasPrefix(prefix) else { return nil }
+
+        let counts = line.dropFirst(prefix.count)
+            .prefix { !$0.isWhitespace }
+            .split(separator: "/", omittingEmptySubsequences: false)
+
+        guard counts.count == 2,
+              let completed = Int(counts[0]),
+              let total = Int(counts[1]),
+              total > 0 else { return nil }
+
+        return (completed, total)
+    }
+
     private static func emitProgress(from line: String, progress: (@Sendable (Progress) -> Void)?) {
         guard let progress else { return }
 
-        if line.hasPrefix("Finished chunk ") {
-            let numbers = line.compactMap { character -> Int? in
-                character.wholeNumberValue
-            }
-            guard numbers.count >= 2 else { return }
-            let (completed, total) = (numbers[0], numbers[1])
+        if let parsed = parseChunkProgressLine(line) {
             progress(Progress(
-                completedChunks: completed,
-                totalChunks: total,
-                phase: total > 1
-                    ? "Transcribing chunk \(completed) of \(total)"
+                completedChunks: parsed.completed,
+                totalChunks: parsed.total,
+                phase: parsed.total > 1
+                    ? "Transcribing chunk \(parsed.completed) of \(parsed.total)"
                     : "Transcribing"
             ))
             return

@@ -41,7 +41,7 @@ struct RecognitionSettingsView: View {
                         : "arrow.down.circle"
                 )
                 .font(.caption)
-                .foregroundStyle(store.effectiveSelectedModelStatus?.isUsable == true ? .green : .orange)
+                .foregroundStyle(store.effectiveSelectedModelStatus?.isUsable == true ? Palette.success : Palette.warning)
             }
 
             if store.installedModelPresets.isEmpty && !store.isRefreshingModels && !store.isUsingGeminiTranscription {

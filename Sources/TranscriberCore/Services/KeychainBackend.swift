@@ -65,7 +65,11 @@ enum KeychainBackend {
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         switch status {
         case errSecSuccess, errSecDuplicateItem:
-            SecItemDelete(identity as CFDictionary)
+            // Must carry the same keychain selector as the add, or it targets a
+            // different keychain and leaves the probe item behind.
+            var deleteQuery = identity
+            deleteQuery[kSecUseDataProtectionKeychain as String] = true
+            SecItemDelete(deleteQuery as CFDictionary)
             return true
         default:
             return false

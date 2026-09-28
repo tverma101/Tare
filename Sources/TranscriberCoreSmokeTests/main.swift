@@ -74,6 +74,8 @@ enum TranscriberCoreSmokeTests {
         try await testGeminiTranscriptionServiceWithMockAPI()
         try testTranscriptionConfigurationRequestsWordTimestampsByDefault()
         try testExportFormatVisibleOptions()
+        try testChunkProgressLineParsing()
+        try testProviderTextIsRedacted()
         try testSupportedMediaRecognizesDefaultPlayerFormats()
         try testPreferredMacCompatibleURLsChooseQuickTimeFriendlyVariant()
         print("TranscriberCoreSmokeTests passed")
@@ -1389,6 +1391,61 @@ enum TranscriberCoreSmokeTests {
             formats: [.text, .wordTimings]
         )
         try expect(timed.requiresWordTimestamps, "Word timing exports should request word timestamp alignment.")
+    }
+
+    /// The bridge reports progress as `Finished chunk i/N (P%)`. Reading those
+    /// as loose digits turned `12/12 (100%)` into 1 of 2, which pinned the
+    /// progress bar and showed a nonsense counter.
+    private static func testChunkProgressLineParsing() throws {
+        let cases: [(String, Int, Int)] = [
+            ("Finished chunk 3/7 (42%)", 3, 7),
+            ("Finished chunk 1/10 (10%)", 1, 10),
+            ("Finished chunk 12/12 (100%)", 12, 12),
+            ("Finished chunk 20/25 (80%)", 20, 25),
+            ("Finished chunk 100/120 (83%)", 100, 120)
+        ]
+
+        for (line, expectedCompleted, expectedTotal) in cases {
+            let parsed = WhisperTranscriptionService.parseChunkProgressLine(line)
+            guard let parsed else {
+                try expect(false, "Chunk progress line should parse: \(line)")
+                return
+            }
+            try expect(
+                parsed.completed == expectedCompleted && parsed.total == expectedTotal,
+                "Chunk progress line \(line) should parse as \(expectedCompleted)/\(expectedTotal), got \(parsed.completed)/\(parsed.total)"
+            )
+        }
+
+        try expect(
+            WhisperTranscriptionService.parseChunkProgressLine("Chunked transcription: 7 chunks, 1 worker(s), 600s chunks") == nil,
+            "The plan banner is not a per-chunk progress line."
+        )
+        try expect(
+            WhisperTranscriptionService.parseChunkProgressLine("Finished chunk 0/0 (0%)") == nil,
+            "A zero total cannot be used to compute a fraction."
+        )
+    }
+
+    /// Provider error text is echoed into the UI, so credential-shaped content
+    /// must never survive into a user-visible string.
+    private static func testProviderTextIsRedacted() throws {
+        let cases: [(String, Bool)] = [
+            ("Unknown name \"key\": \"AIzaSySECRET-KEY-ONE-000000000000\"", true),
+            ("Invalid key sk-abcdefghijklmnopqrstuvwx provided", true),
+            ("Authorization: Bearer abcdefghijklmnopqrstuvwxyz", true),
+            ("api_key=ABCDEFGHIJKLMNOPQRST was refused", true),
+            ("The Generative Language API is not enabled for this project.", false),
+            ("Resource not found: files/abc123", false)
+        ]
+
+        for (input, shouldRedact) in cases {
+            let output = GeminiTranscriptionService.redactCredentialsForTesting(input)
+            try expect(
+                output.contains("[redacted]") == shouldRedact,
+                "Redaction of \"\(input)\" should be \(shouldRedact), got \(output)"
+            )
+        }
     }
 
     private static func testExportFormatVisibleOptions() throws {

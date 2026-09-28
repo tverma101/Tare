@@ -258,7 +258,7 @@ enum TranscriberBatch {
         }
     }
 
-    private static let textSidecarFormats: Set<ExportFormat> = [.text, .timestampedText]
+    private static var textSidecarFormats: Set<ExportFormat> { ExportFormat.sidecarFormats }
 
     private static func logStep(_ message: String, offset: Int, total: Int, startedAt: Date) {
         let elapsed = Date().timeIntervalSince(startedAt)

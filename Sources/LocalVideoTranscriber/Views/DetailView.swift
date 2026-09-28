@@ -129,7 +129,7 @@ private struct DetailHeader: View {
             Button {
                 store.reveal(job.sourceURL)
             } label: {
-                Label("Reveal", systemImage: "magnifyingglass")
+                Label("Reveal Source", systemImage: "magnifyingglass")
             }
         }
         .padding(.horizontal, 20)

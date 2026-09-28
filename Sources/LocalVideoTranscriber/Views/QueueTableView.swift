@@ -32,7 +32,6 @@ struct QueueTableView: View {
                 StateCell(job: job)
             }
             .width(Metric.stateColumnWidth)
-
             TableColumn("Name") { job in
                 Text(job.displayName)
                     .font(Typography.rowTitle)
@@ -84,6 +83,26 @@ struct QueueTableView: View {
         }
         .tableStyle(.inset)
         .accessibilityLabel("Job queue")
+        }
+        .contextMenu(forSelectionType: TranscriptionJob.ID.self) { ids in
+            if let id = ids.first, let job = store.jobs.first(where: { $0.id == id }) {
+                Button("Reveal Source in Finder") {
+                    store.reveal(job.sourceURL)
+                }
+                if job.status == .failed || job.status == .cancelled {
+                    Button(job.status == .cancelled ? "Requeue" : "Retry") {
+                        store.requeue(job.id)
+                    }
+                }
+                Divider()
+                Button("Remove from Queue", role: .destructive) {
+                    store.removeJob(id)
+                }
+            }
+        } primaryAction: { ids in
+            if let id = ids.first {
+                store.selectedJobID = id
+            }
         }
     }
 }

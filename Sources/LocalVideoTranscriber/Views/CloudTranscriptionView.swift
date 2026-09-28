@@ -97,7 +97,14 @@ struct CloudTranscriptionView: View {
                 Spacer()
                 Text("\(store.geminiAPIKeyCount) saved · \(store.geminiUsableAPIKeyCount) enabled")
                     .font(.caption)
-                    .foregroundStyle(store.geminiUsableAPIKeyCount == 0 ? .orange : .secondary)
+                    .foregroundStyle(store.geminiUsableAPIKeyCount == 0 ? Palette.warning : Palette.textSecondary)
+            }
+
+            if let failure = store.geminiCredentialFailureMessage {
+                Label(failure, systemImage: "key.slash")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Text("Keys are stored in the macOS Keychain. Tare keeps only a label and the last four characters in its settings. Cloud options save automatically. Multiple keys provide ordered failover when a request is rejected or temporarily limited; they do not multiply Google’s project quota.")
@@ -135,7 +142,7 @@ struct CloudTranscriptionView: View {
             if let verification = store.geminiVerificationMessage {
                 Label(verification, systemImage: store.cloudErrorMessage == nil ? "checkmark.seal" : "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(store.cloudErrorMessage == nil ? Color.secondary : Color.orange)
+                    .foregroundStyle(store.cloudErrorMessage == nil ? Palette.textSecondary : Palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

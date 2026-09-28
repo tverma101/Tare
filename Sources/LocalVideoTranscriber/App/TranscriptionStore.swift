@@ -12,6 +12,10 @@ final class TranscriptionStore: ObservableObject {
     @Published var outputDirectory: URL {
         didSet {
             UserDefaults.standard.set(outputDirectory.path, forKey: Self.outputDirectoryDefaultsKey)
+            // A previous failure described a folder the user has now replaced.
+            if outputDirectoryError != nil {
+                outputDirectoryError = Self.ensureDirectory(outputDirectory)
+            }
         }
     }
     @Published var createBatchFolder: Bool {
@@ -110,21 +114,27 @@ final class TranscriptionStore: ObservableObject {
     /// instead of resetting to an undifferentiated "Ready".
     enum BatchOutcome: Equatable {
         case running
-        case finished(completed: Int, failed: Int, cancelled: Int)
+        case finished(completed: Int, failed: Int, cancelled: Int, notice: String?)
 
         var statusMessage: String {
             switch self {
             case .running:
                 return "Working…"
-            case let .finished(completed, failed, cancelled):
+            case let .finished(completed, failed, cancelled, notice):
+                var summary: String
                 if failed == 0 && cancelled == 0 {
-                    return completed == 1 ? "Completed 1 job" : "Completed \(completed) jobs"
+                    summary = completed == 1 ? "Completed 1 job" : "Completed \(completed) jobs"
+                } else {
+                    var parts: [String] = []
+                    if completed > 0 { parts.append("\(completed) completed") }
+                    if failed > 0 { parts.append("\(failed) failed") }
+                    if cancelled > 0 { parts.append("\(cancelled) cancelled") }
+                    summary = parts.joined(separator: ", ")
                 }
-                var parts: [String] = []
-                if completed > 0 { parts.append("\(completed) completed") }
-                if failed > 0 { parts.append("\(failed) failed") }
-                if cancelled > 0 { parts.append("\(cancelled) cancelled") }
-                return parts.joined(separator: ", ")
+                // A key that had to be failed over to is worth keeping, since
+                // the per-chunk phase string overwrites it moments later.
+                guard let notice, !notice.isEmpty else { return summary }
+                return "\(summary) · \(notice)"
             }
         }
     }
@@ -168,6 +178,7 @@ final class TranscriptionStore: ObservableObject {
     private var modelPreparationTask: Task<Void, Never>?
     private var batchOutcome: BatchOutcome?
     private var batchTotalCount = 0
+    private var batchJobIDs: Set<TranscriptionJob.ID> = []
     private var shouldAutoStart = false
     private var shouldSelectFirstLocalModel = false
     private var shouldRecoverUnavailableSavedModel = false
@@ -447,11 +458,13 @@ final class TranscriptionStore: ObservableObject {
             }
         }
 
-        func matches(_ job: TranscriptionJob, activeJobID: TranscriptionJob.ID?) -> Bool {
+        func matches(_ job: TranscriptionJob) -> Bool {
             switch self {
             case .all:
                 return true
             case .active:
+                // Work that has not finished yet, which is every queued
+                // file as well as the one running.
                 return !job.status.isTerminal
             case .queued:
                 return job.status == .queued
@@ -463,14 +476,30 @@ final class TranscriptionStore: ObservableObject {
         }
     }
 
-    @Published var queueFilter: QueueFilter = .all
+    @Published var queueFilter: QueueFilter = .all {
+        didSet {
+            guard queueFilter != oldValue else { return }
+            reconcileSelectionWithFilter()
+        }
+    }
+
+    /// Keeps the selection pointing at a row the user can actually see.
+    ///
+    /// The table is filtered but the selection is not, so switching filter could
+    /// leave a job selected that is no longer on screen — and `Remove` is bound
+    /// to the selection, which would let the user delete an invisible job.
+    private func reconcileSelectionWithFilter() {
+        guard let selectedJobID else { return }
+        guard !visibleJobs.contains(where: { $0.id == selectedJobID }) else { return }
+        self.selectedJobID = visibleJobs.first?.id
+    }
 
     func count(for filter: QueueFilter) -> Int {
-        jobs.filter { filter.matches($0, activeJobID: activeJobID) }.count
+        jobs.filter { filter.matches($0) }.count
     }
 
     var visibleJobs: [TranscriptionJob] {
-        jobs.filter { queueFilter.matches($0, activeJobID: activeJobID) }
+        jobs.filter { queueFilter.matches($0) }
     }
 
     var completedCount: Int {
@@ -480,12 +509,8 @@ final class TranscriptionStore: ObservableObject {
     /// Whole-batch progress, so the status strip has something honest to show.
     var batchProgress: Double {
         guard batchTotalCount > 0 else { return 0 }
-        let finished = jobs.filter { $0.status.isTerminal }.count
+        let finished = jobs.filter { batchJobIDs.contains($0.id) && $0.status.isTerminal }.count
         return min(1, Double(finished) / Double(batchTotalCount))
-    }
-
-    var failedCount: Int {
-        jobs.filter { $0.status == .failed }.count
     }
 
     func presentFilePicker() {
@@ -655,8 +680,9 @@ final class TranscriptionStore: ObservableObject {
         }
 
         let group = DispatchGroup()
-        let lock = NSLock()
-        var collected: [URL] = []
+        // A reference box rather than a captured `var`, which is a Swift 6
+        // concurrency error and is published safely by the group's own edge.
+        let collected = LockedURLBox()
 
         for provider in fileProviders {
             group.enter()
@@ -673,14 +699,17 @@ final class TranscriptionStore: ObservableObject {
                 }
 
                 guard let url else { return }
-                lock.lock()
                 collected.append(url)
-                lock.unlock()
             }
         }
 
         group.notify(queue: .main) { [weak self] in
-            self?.addFiles(collected)
+            // Hop through a MainActor task rather than calling a @MainActor
+            // method directly from a non-isolated block.
+            let dropped = collected.urls
+            Task { @MainActor in
+                self?.addFiles(dropped)
+            }
         }
 
         return true
@@ -721,8 +750,21 @@ final class TranscriptionStore: ObservableObject {
 
     func removeSelectedJob() {
         guard let selectedJobID else { return }
-        jobs.removeAll { $0.id == selectedJobID }
-        self.selectedJobID = jobs.first?.id
+        removeJob(selectedJobID)
+    }
+
+    func removeJob(_ id: TranscriptionJob.ID) {
+        let previousIndex = jobs.firstIndex { $0.id == id }
+        jobs.removeAll { $0.id == id }
+
+        guard selectedJobID == id else { return }
+        // Keep the selection where it was in the list rather than jumping to the
+        // top, which is disorienting in a long queue.
+        if let previousIndex, previousIndex < jobs.count {
+            self.selectedJobID = jobs[previousIndex].id
+        } else {
+            self.selectedJobID = jobs.first?.id
+        }
     }
 
     func clearCompleted() {
@@ -779,14 +821,6 @@ final class TranscriptionStore: ObservableObject {
 
     func reveal(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-
-    func toggleFormat(_ format: ExportFormat) {
-        if selectedFormats.contains(format) {
-            selectedFormats.remove(format)
-        } else {
-            selectedFormats.insert(format)
-        }
     }
 
     private func cleanAndOrganizeMKVs(startAfter: Bool) async {
@@ -1049,6 +1083,9 @@ final class TranscriptionStore: ObservableObject {
             .map(\.sourceURL)
 
         let exportDirectory: URL
+        // Tracked separately so the failure path can name the folder that
+        // actually failed rather than defaulting to the root.
+        var attemptedDirectory = outputDirectory
         do {
             if createBatchFolder {
                 exportDirectory = try OutputFolderPlanner.createBatchDirectory(
@@ -1057,12 +1094,13 @@ final class TranscriptionStore: ObservableObject {
                 )
             } else {
                 exportDirectory = outputDirectory
-                try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
             }
+            attemptedDirectory = exportDirectory
+            try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
         } catch {
             statusMessage = "Could not create output folder"
-            outputDirectoryError = Self.ensureDirectory(outputDirectory)
-                ?? "Tare could not prepare \(outputDirectory.path): \(error.localizedDescription)"
+            outputDirectoryError = Self.ensureDirectory(attemptedDirectory)
+                ?? "Tare could not prepare \(attemptedDirectory.path): \(error.localizedDescription)"
             return
         }
 
@@ -1072,11 +1110,17 @@ final class TranscriptionStore: ObservableObject {
         isRunning = true
         statusMessage = "Saving to \(exportDirectory.lastPathComponent)"
 
+        let requestedFormats = selectedFormats.intersection(ExportFormat.sidecarFormats)
+        guard isUsableFormatSelection(selectedFormats) else {
+            statusMessage = "Choose at least one transcript file format"
+            return
+        }
+
         let configuration = TranscriptionConfiguration(
             outputDirectory: exportDirectory,
             localeIdentifier: localeIdentifier,
             modelIdentifier: effectiveModelIdentifier,
-            formats: selectedFormats.intersection(ExportFormat.sidecarFormats),
+            formats: requestedFormats,
             attachCaptionedVideoToSource: attachCaptionedVideoToSource,
             chunkSeconds: WhisperModelPreset.isGeminiTranscribe(effectiveModelIdentifier) || WhisperModelPreset.usesLongFormInference(effectiveModelIdentifier)
                 ? 0
@@ -1603,12 +1647,17 @@ final class TranscriptionStore: ObservableObject {
             runTask = nil
             activeJobID = nil
             if batchOutcome == .running {
+                // Count only what this batch ran, so a queue that already held
+                // failures does not get reported as this run's outcome.
+                let ran = jobs.filter { batchJobIDs.contains($0.id) }
                 batchOutcome = .finished(
-                    completed: jobs.filter { $0.status == .completed }.count,
-                    failed: jobs.filter { $0.status == .failed }.count,
-                    cancelled: jobs.filter { $0.status == .cancelled }.count
+                    completed: ran.filter { $0.status == .completed }.count,
+                    failed: ran.filter { $0.status == .failed }.count,
+                    cancelled: ran.filter { $0.status == .cancelled }.count,
+                    notice: geminiCredentialFailureMessage
                 )
             }
+            batchJobIDs = []
             if let outcome = batchOutcome {
                 batchOutcome = nil
                 statusMessage = outcome.statusMessage
@@ -1619,6 +1668,7 @@ final class TranscriptionStore: ObservableObject {
             .filter { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
             .map(\.id)
         batchTotalCount = jobIDs.count
+        batchJobIDs = Set(jobIDs)
         batchOutcome = .running
 
         let batchGeminiCredentials: [GeminiAPIKeyCredential]?
@@ -1815,6 +1865,7 @@ final class TranscriptionStore: ObservableObject {
                 updateJob(id) { job in
                     job.status = .completed
                     job.progress = 1
+                    job.chunkProgress = nil
                     job.outputURLs = outputURLs
                     job.errorMessage = nil
                     job.completedAt = Date()
@@ -1822,6 +1873,7 @@ final class TranscriptionStore: ObservableObject {
             } catch is CancellationError {
                 updateJob(id) { job in
                     job.status = .cancelled
+                    job.chunkProgress = nil
                     job.errorMessage = "Cancelled"
                     job.completedAt = Date()
                 }
@@ -1834,6 +1886,7 @@ final class TranscriptionStore: ObservableObject {
                 guard !Task.isCancelled else {
                     updateJob(id) { job in
                         job.status = .cancelled
+                        job.chunkProgress = nil
                         job.errorMessage = "Cancelled"
                         job.completedAt = Date()
                     }
@@ -1842,6 +1895,7 @@ final class TranscriptionStore: ObservableObject {
                 }
                 updateJob(id) { job in
                     job.status = .failed
+                    job.chunkProgress = nil
                     job.errorMessage = error.localizedDescription
                     job.completedAt = Date()
                 }
@@ -2086,5 +2140,23 @@ final class TranscriptionStore: ObservableObject {
         }
         let sidecars = formats.intersection(ExportFormat.sidecarFormats)
         return sidecars.isEmpty ? [.text] : sidecars
+    }
+}
+
+/// Thread-safe accumulator for URLs arriving from asynchronous item providers.
+private final class LockedURLBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [URL] = []
+
+    func append(_ url: URL) {
+        lock.lock()
+        storage.append(url)
+        lock.unlock()
+    }
+
+    var urls: [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
     }
 }

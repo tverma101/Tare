@@ -81,6 +81,10 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
     private let metadataKey: String
     private let keychainService: String
 
+    /// Secrets copied into the data-protection Keychain whose legacy copy could
+    /// not be removed yet. Guarded by `mutationQueue`.
+    private var pendingLegacyCleanup: Set<UUID> = []
+
     public init(
         defaults: UserDefaults = .standard,
         metadataKey: String = "geminiAPIKeys.v1",
@@ -155,7 +159,11 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
 
         let existingRecords = try readRecords()
         for record in existingRecords {
-            if let existingKey = try secret(for: record.id), existingKey == normalizedKey {
+            // Read without migrating: a duplicate check should not perform
+            // Keychain maintenance, and must not fail for an unrelated reason.
+            if let existingKey = try readSecret(for: record.id, dataProtection: KeychainBackend.usesDataProtection)
+                ?? (KeychainBackend.usesDataProtection ? try readSecret(for: record.id, dataProtection: false) : nil),
+               existingKey == normalizedKey {
                 throw GeminiAPIKeyStoreError.duplicateKey
             }
         }
@@ -234,10 +242,23 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
         // still in the legacy one. Move it across so it stops being eligible for
         // Keychain backup, then answer from the new location.
         guard KeychainBackend.usesDataProtection else { return nil }
+        // Retry a cleanup that previously failed before looking for a new copy.
+        if pendingLegacyCleanup.contains(id) {
+            try? deleteSecret(for: id, dataProtection: false)
+            pendingLegacyCleanup.remove(id)
+        }
         guard let legacy = try readSecret(for: id, dataProtection: false) else { return nil }
 
         try writeSecret(legacy, for: id)
-        try? deleteSecret(for: id, dataProtection: false)
+        do {
+            try deleteSecret(for: id, dataProtection: false)
+            pendingLegacyCleanup.remove(id)
+        } catch {
+            // The copy is already safe in the new Keychain, so the value is not
+            // at risk. Remember the leftover so a later read retries, rather
+            // than leaving a backup-eligible duplicate behind silently.
+            pendingLegacyCleanup.insert(id)
+        }
         return legacy
     }
 

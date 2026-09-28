@@ -171,7 +171,7 @@ struct ModelsView: View {
 
         return HStack(spacing: 12) {
             Image(systemName: isActive ? "checkmark.circle.fill" : "checkmark.circle")
-                .foregroundStyle(isActive ? Color.accentColor : Color.green)
+                .foregroundStyle(isActive ? Palette.accent : Palette.success)
                 .font(.title3)
 
             VStack(alignment: .leading, spacing: 3) {

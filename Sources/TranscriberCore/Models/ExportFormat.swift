@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ExportFormat: String, CaseIterable, Codable, Hashable, Identifiable {
+public enum ExportFormat: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
     case text
     case timestampedText
     case srt
@@ -82,6 +82,14 @@ public enum ExportFormat: String, CaseIterable, Codable, Hashable, Identifiable 
             return false
         }
     }
+}
+
+/// Keeps a batch from reporting success while writing nothing.
+///
+/// The Export panel lets every format be unchecked, which would otherwise leave
+/// a completed job whose only artifact is the link manifest.
+public func isUsableFormatSelection(_ formats: Set<ExportFormat>) -> Bool {
+    !formats.intersection(ExportFormat.sidecarFormats).isEmpty
 }
 
 public struct TranscriptionConfiguration: Hashable {

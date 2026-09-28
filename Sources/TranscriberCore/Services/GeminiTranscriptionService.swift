@@ -95,7 +95,7 @@ public enum GeminiTranscriptionError: Error, LocalizedError, Hashable, Sendable 
         case .rateLimited:
             return "Google Gemini rate-limited this transcription (often free-tier RPD/TPM). Quotas are per Google Cloud project — extra API keys in the same project do not multiply quota. Tare already honors Retry-After with bounded backoff; wait and retry, switch to a paid project, or use a local model."
         case .modelUnavailable:
-            return "Google Gemini could not use \(GeminiTranscriptionService.modelIdentifier) with the enabled keys. The usual cause is that the Generative Language API is not enabled for the key's Google Cloud project, or that the project is not permitted to use the transcribe model. Enable the Generative Language API for the project in the Google Cloud console, then choose Retry."
+            return "Google Gemini could not use \(GeminiTranscriptionService.modelIdentifier) with the enabled keys. This usually means the Generative Language API is not enabled for the key's Google Cloud project, or the project is not permitted to use the transcribe model. Check the API is enabled for the project in the Google Cloud console, then choose Retry."
         case .requestRejected(let message):
             return "Google Gemini rejected this transcription request. \(message)"
         case .serviceUnavailable:
@@ -272,10 +272,43 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         }
     }
 
+    /// Removes credential-shaped text from a provider-controlled string.
+    ///
+    /// Tare never places a key in a request body, so this is defence in depth:
+    /// a provider error message is echoed into the UI, and nothing should be able
+    /// to make that echo a secret.
+    /// Exposed for the smoke suite; production callers use `truncated`.
+    public static func redactCredentialsForTesting(_ text: String) -> String {
+        redactingCredentials(text)
+    }
+
+    private static func redactingCredentials(_ text: String) -> String {
+        let patterns = [
+            "AIza[0-9A-Za-z_-]{10,}",          // Google API key
+            "sk-[A-Za-z0-9_-]{16,}",            // provider-style secret
+            "(?i)bearer\\s+[A-Za-z0-9._-]{16,}",
+            "(?i)(api[_-]?key|token|secret)\\s*[:=]\\s*\"?[A-Za-z0-9._-]{12,}"
+        ]
+
+        var result = text
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            result = expression.stringByReplacingMatches(
+                in: result,
+                range: range,
+                withTemplate: "[redacted]"
+            )
+        }
+        return result
+    }
+
     private static func truncated(_ message: String, limit: Int) -> String {
-        let normalized = message
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = redactingCredentials(
+            message
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         guard normalized.count > limit else { return normalized }
         return String(normalized.prefix(limit)) + "…"
     }
