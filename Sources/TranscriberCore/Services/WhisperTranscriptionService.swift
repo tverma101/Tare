@@ -57,6 +57,18 @@ public final class WhisperTranscriptionService {
         self.scriptURL = resolvedScriptURL
     }
 
+    /// Progress reported while a local transcription runs.
+    public struct Progress: Sendable {
+        public let completedChunks: Int
+        public let totalChunks: Int
+        public let phase: String
+
+        public var fraction: Double {
+            guard totalChunks > 0 else { return 0 }
+            return Double(completedChunks) / Double(totalChunks)
+        }
+    }
+
     public func transcribe(
         audioURL: URL,
         sourceName: String,
@@ -64,7 +76,8 @@ public final class WhisperTranscriptionService {
         modelIdentifier: String,
         chunkSeconds: Int = 0,
         chunkWorkerCount: Int = 1,
-        wordTimestamps: Bool = false
+        wordTimestamps: Bool = false,
+        progress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> Transcript {
         let resultURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("Tare", isDirectory: true)
@@ -104,7 +117,10 @@ public final class WhisperTranscriptionService {
                 executableURL: pythonURL,
                 arguments: arguments,
                 environment: Self.transcriptionEnvironment(),
-                forwardOutput: true
+                forwardOutput: true,
+                onStandardError: { line in
+                    Self.emitProgress(from: line, progress: progress)
+                }
             )
         } catch {
             throw Self.userFacingError(error, modelIdentifier: modelIdentifier)
@@ -151,6 +167,36 @@ public final class WhisperTranscriptionService {
             fullText: fullText,
             segments: segments
         )
+    }
+
+    /// Reads the bridge script's own progress lines so the UI can show real
+    /// per-chunk progress instead of extrapolating from a fixed fraction.
+    ///
+    /// The script writes `Chunked transcription: N chunks, ...` once, then
+    /// `Finished chunk i/N (P%)` per chunk, both to stderr.
+    private static func emitProgress(from line: String, progress: (@Sendable (Progress) -> Void)?) {
+        guard let progress else { return }
+
+        if line.hasPrefix("Finished chunk ") {
+            let numbers = line.compactMap { character -> Int? in
+                character.wholeNumberValue
+            }
+            guard numbers.count >= 2 else { return }
+            let (completed, total) = (numbers[0], numbers[1])
+            progress(Progress(
+                completedChunks: completed,
+                totalChunks: total,
+                phase: total > 1
+                    ? "Transcribing chunk \(completed) of \(total)"
+                    : "Transcribing"
+            ))
+            return
+        }
+
+        if line.hasPrefix("MLX-Audio: loading ") {
+            let model = line.replacingOccurrences(of: "MLX-Audio: loading ", with: "")
+            progress(Progress(completedChunks: 0, totalChunks: 0, phase: "Loading \(model)"))
+        }
     }
 
     public static func resolvePythonURL() -> URL? {

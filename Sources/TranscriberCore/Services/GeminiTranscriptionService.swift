@@ -5,17 +5,35 @@ public struct GeminiTranscriptionProgress: Sendable {
     public let completedChunks: Int
     public let totalChunks: Int
     public let estimatedInputTokens: Int64
+    /// Set when one saved key was rejected or failed and Tare moved on to the
+    /// next one, so a failover job is not indistinguishable from a job where the
+    /// first key served everything. It names the record's label, never the key.
+    public let credentialFailure: CredentialFailure?
+
+    public struct CredentialFailure: Hashable, Sendable {
+        public let credentialID: UUID
+        public let label: String
+        public let reason: String
+
+        public init(credentialID: UUID, label: String, reason: String) {
+            self.credentialID = credentialID
+            self.label = label
+            self.reason = reason
+        }
+    }
 
     public init(
         phase: String,
         completedChunks: Int,
         totalChunks: Int,
-        estimatedInputTokens: Int64 = 0
+        estimatedInputTokens: Int64 = 0,
+        credentialFailure: CredentialFailure? = nil
     ) {
         self.phase = phase
         self.completedChunks = completedChunks
         self.totalChunks = totalChunks
         self.estimatedInputTokens = estimatedInputTokens
+        self.credentialFailure = credentialFailure
     }
 }
 
@@ -77,7 +95,7 @@ public enum GeminiTranscriptionError: Error, LocalizedError, Hashable, Sendable 
         case .rateLimited:
             return "Google Gemini rate-limited this transcription (often free-tier RPD/TPM). Quotas are per Google Cloud project — extra API keys in the same project do not multiply quota. Tare already honors Retry-After with bounded backoff; wait and retry, switch to a paid project, or use a local model."
         case .modelUnavailable:
-            return "Google Gemini could not find Gemini 3.5 Transcribe for one of the enabled projects. Check API access or choose a local model."
+            return "Google Gemini could not use \(GeminiTranscriptionService.modelIdentifier) with the enabled keys. The usual cause is that the Generative Language API is not enabled for the key's Google Cloud project, or that the project is not permitted to use the transcribe model. Enable the Generative Language API for the project in the Google Cloud console, then choose Retry."
         case .requestRejected(let message):
             return "Google Gemini rejected this transcription request. \(message)"
         case .serviceUnavailable:
@@ -177,7 +195,7 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
     public func verifyTranscribeModelAccess(
         credentials: [GeminiAPIKeyCredential]
     ) async -> GeminiModelAccessVerification {
-        var lastFailure: String?
+        var failures: [GeminiCredentialFailure] = []
         for credential in credentials {
             do {
                 let result = try await verifyTranscribeModelAccess(apiKey: credential.apiKey)
@@ -189,26 +207,77 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
                         verifiedCredentialID: credential.id
                     )
                 }
-                lastFailure = result.message
-            } catch let error as GeminiTranscriptionError {
-                lastFailure = error.localizedDescription
-                switch error {
-                case .authenticationFailed, .modelUnavailable, .rateLimited, .serviceUnavailable, .networkUnavailable:
-                    continue
-                default:
-                    continue
-                }
+                failures.append(
+                    GeminiCredentialFailure(
+                        label: credential.label,
+                        summary: Self.truncated(result.message, limit: 300),
+                        reason: Self.truncated(result.message, limit: 160)
+                    )
+                )
             } catch {
-                lastFailure = error.localizedDescription
+                // Every credential here is worth reporting: replacing the
+                // previous failure meant the user saw one arbitrary message
+                // from an arbitrary key, and no count of what was rejected.
+                failures.append(
+                    GeminiCredentialFailure(
+                        label: credential.label,
+                        summary: Self.truncated(error.localizedDescription, limit: 300),
+                        reason: Self.credentialFailureReason(for: error)
+                    )
+                )
             }
         }
 
         return GeminiModelAccessVerification(
             modelIdentifier: Self.modelIdentifier,
             isAvailable: false,
-            message: lastFailure
-                ?? "None of the enabled Gemini API keys could access \(Self.modelIdentifier)."
+            message: Self.verificationFailureMessage(failures: failures, attemptedCount: credentials.count)
         )
+    }
+
+    private static func verificationFailureMessage(
+        failures: [GeminiCredentialFailure],
+        attemptedCount: Int
+    ) -> String {
+        guard let first = failures.first else {
+            return "None of the enabled Gemini API keys could access \(Self.modelIdentifier)."
+        }
+        // One failed key keeps its full guidance; several get the count plus a
+        // short per-label reason, because the full texts repeat themselves.
+        guard failures.count > 1 else { return first.summary }
+        let details = failures
+            .map { "\($0.label): \($0.reason)" }
+            .joined(separator: " ")
+        return "\(failures.count) of \(attemptedCount) enabled Gemini API keys failed to reach \(Self.modelIdentifier). \(details)"
+    }
+
+    /// A short, key-free reason for a status line or an aggregated message.
+    private static func credentialFailureReason(for error: Error) -> String {
+        guard let transcriptionError = error as? GeminiTranscriptionError else {
+            return truncated(error.localizedDescription, limit: 160)
+        }
+        switch transcriptionError {
+        case .authenticationFailed:
+            return "Google rejected the key"
+        case .modelUnavailable:
+            return "the project cannot use \(Self.modelIdentifier) (is the Generative Language API enabled?)"
+        case .rateLimited:
+            return "the project hit a quota limit"
+        case .serviceUnavailable:
+            return "Google reported a temporary service failure"
+        case .networkUnavailable:
+            return "Tare could not reach Google"
+        default:
+            return truncated(transcriptionError.localizedDescription, limit: 160)
+        }
+    }
+
+    private static func truncated(_ message: String, limit: Int) -> String {
+        let normalized = message
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return String(normalized.prefix(limit)) + "…"
     }
 
     public func transcribe(
@@ -232,7 +301,7 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
                   seenKeys.insert(key).inserted else {
                 return nil
             }
-            return GeminiAPIKeyCredential(id: credential.id, apiKey: key)
+            return GeminiAPIKeyCredential(id: credential.id, apiKey: key, label: credential.label)
         }
         guard !usableCredentials.isEmpty else {
             throw GeminiTranscriptionError.apiKeysMissing
@@ -319,6 +388,12 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
                     credentials: usableCredentials,
                     options: validatedOptions,
                     startingCredentialIndex: nextCredentialIndex,
+                    chunkProgress: GeminiChunkProgress(
+                        completedChunks: chunk.index - 1,
+                        totalChunks: plan.chunks.count,
+                        estimatedInputTokens: plan.estimatedInputTokens
+                    ),
+                    progress: progress,
                     onCredentialUsed: onCredentialUsed
                 )
                 nextCredentialIndex = (result.credentialIndex + 1) % usableCredentials.count
@@ -360,6 +435,8 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         credentials: [GeminiAPIKeyCredential],
         options: GeminiTranscriptionOptions,
         startingCredentialIndex: Int,
+        chunkProgress: GeminiChunkProgress,
+        progress: @escaping @Sendable (GeminiTranscriptionProgress) -> Void,
         onCredentialUsed: @escaping @Sendable (UUID) -> Void
     ) async throws -> (credentialIndex: Int, transcript: GeminiChunkTranscript) {
         var lastError: Error?
@@ -369,6 +446,7 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
 
             let credentialIndex = (startingCredentialIndex + offset) % credentials.count
             let credential = credentials[credentialIndex]
+            let hasAnotherKey = offset + 1 < credentials.count
 
             do {
                 let transcript = try await transcribeChunkWithCredential(
@@ -382,12 +460,27 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
                 return (credentialIndex, transcript)
             } catch let error as GeminiHTTPError {
                 lastError = error
+                let mapped = map(error)
+                reportCredentialFailure(
+                    credential,
+                    reason: Self.credentialFailureReason(for: mapped),
+                    triesAnotherKey: hasAnotherKey && error.shouldTryAnotherCredential,
+                    chunkProgress: chunkProgress,
+                    progress: progress
+                )
                 guard error.shouldTryAnotherCredential else {
-                    throw map(error)
+                    throw mapped
                 }
             } catch let error as URLError {
                 guard error.code != .cancelled else { throw CancellationError() }
                 lastError = error
+                reportCredentialFailure(
+                    credential,
+                    reason: "Tare could not reach Google with this key",
+                    triesAnotherKey: hasAnotherKey,
+                    chunkProgress: chunkProgress,
+                    progress: progress
+                )
             } catch {
                 throw error
             }
@@ -400,6 +493,33 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
             throw GeminiTranscriptionError.networkUnavailable
         }
         throw GeminiTranscriptionError.providerFailure("All enabled API keys failed for this chunk.")
+    }
+
+    /// Surfaces a rejected key in the job status line so the failover is visible.
+    /// Only the saved label and a short reason are ever reported.
+    private func reportCredentialFailure(
+        _ credential: GeminiAPIKeyCredential,
+        reason: String,
+        triesAnotherKey: Bool,
+        chunkProgress: GeminiChunkProgress,
+        progress: @Sendable (GeminiTranscriptionProgress) -> Void
+    ) {
+        let phase = triesAnotherKey
+            ? "\(credential.label) failed: \(reason). Trying the next saved key…"
+            : "\(credential.label) failed: \(reason)."
+        progress(
+            GeminiTranscriptionProgress(
+                phase: phase,
+                completedChunks: chunkProgress.completedChunks,
+                totalChunks: chunkProgress.totalChunks,
+                estimatedInputTokens: chunkProgress.estimatedInputTokens,
+                credentialFailure: GeminiTranscriptionProgress.CredentialFailure(
+                    credentialID: credential.id,
+                    label: credential.label,
+                    reason: reason
+                )
+            )
+        )
     }
 
     private func transcribeChunkWithCredential(
@@ -486,36 +606,51 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
             try await self.session.upload(for: uploadRequest, fromFile: audioURL)
         }
         try checkHTTP(fileData, response: fileResponse)
-        let decodedFile = try decodeFile(from: fileData)
-        let file = GeminiFile(
-            name: decodedFile.name,
-            uri: decodedFile.uri,
-            mimeType: decodedFile.mimeType ?? mimeType,
-            state: decodedFile.state
-        )
-        guard !file.name.isEmpty, !file.uri.isEmpty else {
-            throw GeminiTranscriptionError.uploadFailed
-        }
+        // The object exists in Google's Files store from here on, so every throw
+        // below must try to delete it. A body that does not decode as the
+        // expected file resource can still expose the name, so recover it from
+        // the raw payload instead of leaving the audio behind for its
+        // retention window.
+        var uploadedFileName = Self.recoverableFileName(from: fileData)
+        do {
+            let decodedFile = try decodeFile(from: fileData)
+            let file = GeminiFile(
+                name: decodedFile.name,
+                uri: decodedFile.uri,
+                mimeType: decodedFile.mimeType ?? mimeType,
+                state: decodedFile.state
+            )
+            guard !file.name.isEmpty, !file.uri.isEmpty else {
+                throw GeminiTranscriptionError.uploadFailed
+            }
+            uploadedFileName = file.name
 
-        switch file.state?.uppercased() {
-        case "PROCESSING":
-            do {
+            switch file.state?.uppercased() {
+            case "PROCESSING":
                 return try await waitForActiveFile(
                     file,
                     expectedMimeType: mimeType,
                     credential: credential
                 )
-            } catch {
-                await deleteFile(named: file.name, credential: credential)
-                throw error
+            case "FAILED":
+                throw GeminiTranscriptionError.fileProcessingFailed("Google marked the uploaded file as failed.")
+            default:
+                return file
             }
-        case "FAILED":
-            await deleteFile(named: file.name, credential: credential)
-            throw GeminiTranscriptionError.fileProcessingFailed("Google marked the uploaded file as failed.")
-        default:
-            break
+        } catch {
+            await deleteFile(named: uploadedFileName ?? "", credential: credential)
+            throw error
         }
-        return file
+    }
+
+    /// Best-effort recovery of a `files/…` name from a finalize body that failed
+    /// to decode, so the uploaded object can still be deleted.
+    private static func recoverableFileName(from data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let candidates = [(root["file"] as? [String: Any])?["name"], root["name"]]
+        return candidates
+            .compactMap { $0 as? String }
+            .first { $0.hasPrefix("files/") && $0.count > "files/".count }
     }
 
     private func waitForActiveFile(
@@ -688,7 +823,11 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
     private func map(_ error: GeminiHTTPError) -> GeminiTranscriptionError {
         switch error.statusCode {
         case 401, 403:
-            return .authenticationFailed
+            // Google answers 403 both for a rejected key and for a project that
+            // has not enabled the Generative Language API or cannot use the
+            // transcribe model. Reporting the latter as a bad key sends the user
+            // to fix keys that are fine, so trust the provider code first.
+            return error.isPermissionDenied ? .modelUnavailable : .authenticationFailed
         case 404:
             return .modelUnavailable
         case 408, 429:
@@ -1104,12 +1243,20 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
     private static func providerCode(from data: Data) -> String? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         if let error = root["error"] as? [String: Any] {
-            return error["code"] as? String
+            return providerName(error["status"]) ?? providerName(error["code"])
         }
         if let errors = root["errors"] as? [[String: Any]], let first = errors.first {
-            return first["code"] as? String
+            return providerName(first["status"]) ?? providerName(first["code"])
         }
         return nil
+    }
+
+    /// Keeps only the string form: Google repeats the HTTP status numerically in
+    /// `code` and names the condition (`PERMISSION_DENIED`) in `status`.
+    private static func providerName(_ value: Any?) -> String? {
+        guard let name = value as? String else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func providerMessage(from data: Data) -> String {
@@ -1286,6 +1433,24 @@ private struct GeminiChunkTranscript {
     let words: [GeminiWord]
 }
 
+/// The chunk counters a status event must carry so a credential-failure notice
+/// does not move the job's chunk progress.
+private struct GeminiChunkProgress {
+    let completedChunks: Int
+    let totalChunks: Int
+    let estimatedInputTokens: Int64
+}
+
+/// A per-key failure captured while walking the saved keys. Carries the record's
+/// label only, so no message can leak the key itself.
+private struct GeminiCredentialFailure {
+    let label: String
+    /// The full provider/case guidance, used when it is the only failure.
+    let summary: String
+    /// A short form for an aggregate with other keys or a status line.
+    let reason: String
+}
+
 private struct GeminiWord: Hashable {
     let text: String
     let start: TimeInterval
@@ -1300,6 +1465,12 @@ private struct GeminiHTTPError: Error {
 
     var isRetryable: Bool {
         statusCode == 408 || statusCode == 429 || statusCode >= 500
+    }
+
+    /// Google's `PERMISSION_DENIED` covers both a key Google will not accept
+    /// and a project that has not enabled the Generative Language API.
+    var isPermissionDenied: Bool {
+        code?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "PERMISSION_DENIED"
     }
 
     var shouldTryAnotherCredential: Bool {

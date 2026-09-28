@@ -34,7 +34,8 @@ public final class ProcessRunner {
         executableURL: URL,
         arguments: [String],
         environment: [String: String] = [:],
-        forwardOutput: Bool = false
+        forwardOutput: Bool = false,
+        onStandardError: ((String) -> Void)? = nil
     ) async throws -> ProcessResult {
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
             throw ProcessRunnerError.executableMissing(executableURL.path)
@@ -51,6 +52,7 @@ public final class ProcessRunner {
         process.standardError = stderrPipe
 
         let output = LockedProcessOutput()
+        let lineBuffer = LockedLineBuffer()
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             output.appendStdout(data)
@@ -61,6 +63,11 @@ public final class ProcessRunner {
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             output.appendStderr(data)
+            if let onStandardError {
+                for line in lineBuffer.consumeLines(from: data) {
+                    onStandardError(line)
+                }
+            }
             if forwardOutput {
                 FileHandle.standardError.write(data)
             }
@@ -99,6 +106,29 @@ public final class ProcessRunner {
                 process.terminate()
             }
         }
+    }
+}
+
+private final class LockedLineBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = ""
+
+    /// Splits streamed output into whole lines, holding any partial trailing
+    /// line until the rest of it arrives.
+    func consumeLines(from data: Data) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        pending += String(data: data, encoding: .utf8) ?? ""
+
+        var lines: [String] = []
+        while let newlineIndex = pending.firstIndex(of: "\n") {
+            let line = pending[pending.startIndex..<newlineIndex]
+            pending = String(pending[pending.index(after: newlineIndex)...])
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { lines.append(trimmed) }
+        }
+        return lines
     }
 }
 

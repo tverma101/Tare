@@ -189,6 +189,15 @@ struct ModelsView: View {
                 Text(preset.detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Text(factSummary(for: preset, includesDownloadSize: status == nil))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                if let note = preset.memoryRequirementNote {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let status {
                     Text("Installed · \(status.sizeDescription)")
                         .font(.caption)
@@ -228,6 +237,20 @@ struct ModelsView: View {
         return "Delete the cached files for \(preset.displayName). You will need to download it again."
     }
 
+    /// The decision facts a row does not otherwise show: coverage, word
+    /// timestamps, and the download size when the cache size is not already on
+    /// the row.
+    private func factSummary(for preset: WhisperModelPreset, includesDownloadSize: Bool) -> String {
+        var facts = [
+            preset.isMultilingual ? "Multilingual" : "English only",
+            preset.supportsWordTimestamps ? "Word timestamps" : "No word timestamps"
+        ]
+        if includesDownloadSize, let size = preset.downloadSizeDescription {
+            facts.append(size)
+        }
+        return facts.joined(separator: " · ")
+    }
+
     private func downloadModelRow(for preset: WhisperModelPreset) -> some View {
         let status = store.modelStatus(for: preset)
         let needsRepair = status?.isAvailable == true && status?.isUsable != true
@@ -248,6 +271,15 @@ struct ModelsView: View {
                 Text(preset.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text(factSummary(for: preset, includesDownloadSize: true))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                if let note = preset.memoryRequirementNote {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if needsRepair {
                     Text(status?.issueMessage ?? "Cached but not usable")
                         .font(.caption)

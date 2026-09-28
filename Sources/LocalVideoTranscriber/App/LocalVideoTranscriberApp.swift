@@ -18,17 +18,21 @@ struct TareApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
-                Button(store.isRunning ? "Cancel Batch" : "Start Batch") {
-                    store.isRunning ? store.cancelBatch() : store.startBatch()
+                Button(store.isRunning || store.isPreparingModel ? "Cancel Batch" : "Start Batch") {
+                    if store.isRunning || store.isPreparingModel {
+                        store.cancelBatch()
+                    } else {
+                        store.startBatch()
+                    }
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(!store.canStart && !store.isRunning)
+                .disabled(!store.canStart && !store.isRunning && !store.isPreparingModel)
             }
         }
 
         Settings {
             SettingsView(store: store)
-                .frame(width: 420)
+                .frame(minWidth: 420, idealWidth: 520, minHeight: 480, idealHeight: 640)
         }
     }
 }

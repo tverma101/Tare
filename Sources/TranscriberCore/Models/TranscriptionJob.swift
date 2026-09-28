@@ -38,11 +38,23 @@ public enum JobStatus: String, CaseIterable, Codable, Hashable {
     }
 }
 
+/// How far through a chunked transcription a job is.
+public struct ChunkProgress: Hashable, Sendable {
+    public let completed: Int
+    public let total: Int
+
+    public init(completed: Int, total: Int) {
+        self.completed = completed
+        self.total = total
+    }
+}
+
 public struct TranscriptionJob: Identifiable, Hashable {
     public let id: UUID
     public var sourceURL: URL
     public var status: JobStatus
     public var progress: Double
+    public var chunkProgress: ChunkProgress?
     public var transcript: Transcript?
     public var linkedTranscriptURL: URL?
     public var outputURLs: [URL]
@@ -56,6 +68,7 @@ public struct TranscriptionJob: Identifiable, Hashable {
         sourceURL: URL,
         status: JobStatus = .queued,
         progress: Double = 0,
+        chunkProgress: ChunkProgress? = nil,
         transcript: Transcript? = nil,
         linkedTranscriptURL: URL? = nil,
         outputURLs: [URL] = [],
@@ -68,6 +81,7 @@ public struct TranscriptionJob: Identifiable, Hashable {
         self.sourceURL = sourceURL
         self.status = status
         self.progress = progress
+        self.chunkProgress = chunkProgress
         self.transcript = transcript
         self.linkedTranscriptURL = linkedTranscriptURL
         self.outputURLs = outputURLs

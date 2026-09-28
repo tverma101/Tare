@@ -57,6 +57,10 @@ final class TranscriptionStore: ObservableObject {
     }
     @Published var modelIdentifier: String {
         didSet {
+            // An empty string normalizes to a real preset, which snapped the
+            // field back mid-edit and made a custom ID impossible to type from
+            // scratch. Leave it blank; Start normalizes before use.
+            guard !modelIdentifier.isEmpty else { return }
             let normalizedIdentifier = Self.normalizedModelIdentifier(modelIdentifier)
             if normalizedIdentifier != modelIdentifier {
                 modelIdentifier = normalizedIdentifier
@@ -95,11 +99,36 @@ final class TranscriptionStore: ObservableObject {
     @Published private(set) var isVerifyingGeminiKeys = false
     @Published private(set) var geminiVerificationMessage: String?
     @Published private(set) var geminiVerifiedCredentialIDs: Set<UUID> = []
+    /// The last saved key Gemini rejected during a cloud job, by label only.
+    @Published private(set) var geminiCredentialFailureMessage: String?
     @Published var selectedFormats: Set<ExportFormat> = [.text] {
         didSet {
             Self.saveSelectedFormats(selectedFormats)
         }
     }
+    /// What a finished batch did, so the status line can report the result
+    /// instead of resetting to an undifferentiated "Ready".
+    enum BatchOutcome: Equatable {
+        case running
+        case finished(completed: Int, failed: Int, cancelled: Int)
+
+        var statusMessage: String {
+            switch self {
+            case .running:
+                return "Working…"
+            case let .finished(completed, failed, cancelled):
+                if failed == 0 && cancelled == 0 {
+                    return completed == 1 ? "Completed 1 job" : "Completed \(completed) jobs"
+                }
+                var parts: [String] = []
+                if completed > 0 { parts.append("\(completed) completed") }
+                if failed > 0 { parts.append("\(failed) failed") }
+                if cancelled > 0 { parts.append("\(cancelled) cancelled") }
+                return parts.joined(separator: ", ")
+            }
+        }
+    }
+
     @Published var isRunning = false
     @Published var isPreparingModel = false
     @Published var isScanning = false
@@ -116,6 +145,8 @@ final class TranscriptionStore: ObservableObject {
     /// to start is visible where the user pressed the button.
     @Published var modelSelectionErrorMessage: String?
     @Published var cloudErrorMessage: String?
+    /// Set when the configured output root cannot be created or written.
+    @Published private(set) var outputDirectoryError: String?
     @Published private(set) var freeLLMAPIKeyConfigured = false
     @Published private(set) var freeLLMAPIStatusMessage = "Optional: use the local FreeLLMAPI app for compact transcript names."
 
@@ -135,6 +166,8 @@ final class TranscriptionStore: ObservableObject {
     private let transcriptNamingService = TranscriptNamingService()
     private var runTask: Task<Void, Never>?
     private var modelPreparationTask: Task<Void, Never>?
+    private var batchOutcome: BatchOutcome?
+    private var batchTotalCount = 0
     private var shouldAutoStart = false
     private var shouldSelectFirstLocalModel = false
     private var shouldRecoverUnavailableSavedModel = false
@@ -164,25 +197,22 @@ final class TranscriptionStore: ObservableObject {
         if let outputPath = environment["TARE_OUTPUT_DIR"], !outputPath.isEmpty {
             let outputRoot = URL(fileURLWithPath: outputPath, isDirectory: true)
             outputDirectory = outputRoot
-            try? FileManager.default.createDirectory(
-                at: outputRoot,
-                withIntermediateDirectories: true
-            )
+            if let failure = Self.ensureDirectory(outputRoot) {
+                outputDirectoryError = failure
+            }
         } else if let savedPath = UserDefaults.standard.string(forKey: Self.outputDirectoryDefaultsKey),
                   !savedPath.isEmpty {
             let outputRoot = URL(fileURLWithPath: savedPath, isDirectory: true)
             outputDirectory = outputRoot
-            try? FileManager.default.createDirectory(
-                at: outputRoot,
-                withIntermediateDirectories: true
-            )
+            if let failure = Self.ensureDirectory(outputRoot) {
+                outputDirectoryError = failure
+            }
         } else {
             let outputRoot = OutputFolderPlanner.defaultRootDirectory()
             outputDirectory = outputRoot
-            try? FileManager.default.createDirectory(
-                at: outputRoot,
-                withIntermediateDirectories: true
-            )
+            if let failure = Self.ensureDirectory(outputRoot) {
+                outputDirectoryError = failure
+            }
         }
 
         if let rawCreateBatchFolder = environment["TARE_CREATE_BATCH_FOLDER"] {
@@ -203,7 +233,13 @@ final class TranscriptionStore: ObservableObject {
 
         freeLLMAPIKeyConfigured = UserDefaults.standard.bool(forKey: Self.freeLLMAPIKeyConfiguredDefaultsKey)
 
-        attachCaptionedVideoToSource = true
+        if let rawAttach = environment["TARE_ATTACH_CAPTIONED_VIDEO"] {
+            attachCaptionedVideoToSource = rawAttach != "0"
+        } else if UserDefaults.standard.object(forKey: Self.attachCaptionedVideoToSourceDefaultsKey) != nil {
+            attachCaptionedVideoToSource = UserDefaults.standard.bool(forKey: Self.attachCaptionedVideoToSourceDefaultsKey)
+        } else {
+            attachCaptionedVideoToSource = true
+        }
 
         if let libraryPath = environment["TARE_LIBRARY_DIR"], !libraryPath.isEmpty {
             libraryDirectory = URL(fileURLWithPath: libraryPath, isDirectory: true)
@@ -348,8 +384,25 @@ final class TranscriptionStore: ObservableObject {
         return jobs.first { $0.id == selectedJobID }
     }
 
+    /// The job the running batch is working on right now.
+    ///
+    /// Deliberately separate from `selectedJobID`, which is the user's
+    /// inspection target: the batch used to overwrite it, so clicking another
+    /// job mid-run made the detail pane contradict what was really happening.
+    @Published private(set) var activeJobID: TranscriptionJob.ID?
+
+    var activeJob: TranscriptionJob? {
+        guard let activeJobID else { return nil }
+        return jobs.first { $0.id == activeJobID }
+    }
+
     var mkvJobCount: Int {
         jobs.filter { Self.isMKV($0.sourceURL) }.count
+    }
+
+    /// The queued MKV files that organizing would rename and move on disk.
+    var mkvSourceURLs: [URL] {
+        jobs.filter { Self.isMKV($0.sourceURL) }.map(\.sourceURL)
     }
 
     var canScanForMKVs: Bool {
@@ -402,6 +455,10 @@ final class TranscriptionStore: ObservableObject {
 
         presentOpenPanel(panel) { [weak self] panel in
             guard let url = panel.url else { return }
+            guard FileManager.default.isWritableFile(atPath: url.path) else {
+                self?.statusMessage = "\(url.lastPathComponent) is not writable. Choose another output folder."
+                return
+            }
             self?.outputDirectory = url
         }
     }
@@ -459,11 +516,13 @@ final class TranscriptionStore: ObservableObject {
 
     func addFiles(_ urls: [URL]) {
         let existing = Set(jobs.map { $0.sourceURL.standardizedFileURL })
-        let supported = SupportedMedia.preferredMacCompatibleURLs(from: urls)
-            .filter { !existing.contains($0) }
+        let candidates = SupportedMedia.preferredMacCompatibleURLs(from: urls)
+        let supported = candidates.filter { !existing.contains($0) }
 
         guard !supported.isEmpty else {
-            statusMessage = "No supported new files"
+            statusMessage = candidates.isEmpty
+                ? "No supported audio or video in that selection"
+                : "Already in the queue"
             return
         }
 
@@ -471,7 +530,15 @@ final class TranscriptionStore: ObservableObject {
         jobs.append(contentsOf: newJobs)
         selectedJobID = selectedJobID ?? newJobs.first?.id
         let addedCount = newJobs.count
-        let addMessage = "\(addedCount) file\(addedCount == 1 ? "" : "s") added"
+
+        var notes: [String] = ["\(addedCount) file\(addedCount == 1 ? "" : "s") added"]
+        if candidates.count < Set(urls.map(\.standardizedFileURL)).count {
+            notes.append("unsupported skipped")
+        }
+        if isRunning {
+            notes.append("will wait for the next Start")
+        }
+        let addMessage = notes.joined(separator: "; ")
         statusMessage = addMessage
         resolveLinkedTranscripts(for: newJobs.map(\.id), addedCount: addedCount, pendingMessage: addMessage)
     }
@@ -516,14 +583,29 @@ final class TranscriptionStore: ObservableObject {
         }
     }
 
+    /// Collects every dropped file and imports them in one pass.
+    ///
+    /// Adding them one at a time reordered the queue by load-completion order
+    /// and re-ran the transcript-link lookup per file.
     func addDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
-        var handled = false
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else {
+            statusMessage = "Only audio and video files can be added"
+            return false
+        }
 
-        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            handled = true
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, _ in
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var collected: [URL] = []
+
+        for provider in fileProviders {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+
                 let url: URL?
-
                 if let itemURL = item as? URL {
                     url = itemURL
                 } else if let data = item as? Data {
@@ -533,14 +615,17 @@ final class TranscriptionStore: ObservableObject {
                 }
 
                 guard let url else { return }
-
-                Task { @MainActor [weak self] in
-                    self?.addFiles([url])
-                }
+                lock.lock()
+                collected.append(url)
+                lock.unlock()
             }
         }
 
-        return handled
+        group.notify(queue: .main) { [weak self] in
+            self?.addFiles(collected)
+        }
+
+        return true
     }
 
     func scanForMKVs(autoProcess: Bool = false) async {
@@ -583,30 +668,54 @@ final class TranscriptionStore: ObservableObject {
     }
 
     func clearCompleted() {
+        let previousIndex = selectedJobID.flatMap { id in jobs.firstIndex { $0.id == id } }
         jobs.removeAll { $0.status == .completed }
-        if let selectedJobID, jobs.allSatisfy({ $0.id != selectedJobID }) {
+
+        guard let selectedJobID else { return }
+        if jobs.contains(where: { $0.id == selectedJobID }) { return }
+        if let previousIndex, previousIndex < jobs.count {
+            self.selectedJobID = jobs[previousIndex].id
+        } else {
             self.selectedJobID = jobs.first?.id
         }
     }
 
     func retrySelectedJob() {
         guard let id = selectedJobID else { return }
+        requeue(id)
+    }
+
+    /// Returns a finished job to the queue.
+    ///
+    /// A running batch already snapshotted its work list, so the job cannot
+    /// join the batch in flight. Say so rather than leaving it looking stalled.
+    func requeue(_ id: TranscriptionJob.ID) {
+        guard let job = jobs.first(where: { $0.id == id }) else { return }
+        guard job.status == .failed || job.status == .cancelled else { return }
+
         updateJob(id) { job in
             job.status = .queued
             job.progress = 0
+            job.chunkProgress = nil
             job.errorMessage = nil
             job.outputURLs = []
+            job.transcript = nil
             job.startedAt = nil
             job.completedAt = nil
         }
+
+        statusMessage = isRunning
+            ? "\(job.displayName) requeued — it will run when you press Start again"
+            : "\(job.displayName) requeued — press Start to run"
     }
 
     func revealOutputDirectory() {
         let directory = currentOutputDirectory
-        try? FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
+        if let failure = Self.ensureDirectory(directory) {
+            outputDirectoryError = failure
+            statusMessage = "Could not open the output folder"
+            return
+        }
         NSWorkspace.shared.activateFileViewerSelecting([directory])
     }
 
@@ -878,8 +987,12 @@ final class TranscriptionStore: ObservableObject {
             }
         } catch {
             statusMessage = "Could not create output folder"
+            outputDirectoryError = Self.ensureDirectory(outputDirectory)
+                ?? "Tare could not prepare \(outputDirectory.path): \(error.localizedDescription)"
             return
         }
+
+        outputDirectoryError = nil
 
         lastOutputDirectory = exportDirectory
         isRunning = true
@@ -890,7 +1003,7 @@ final class TranscriptionStore: ObservableObject {
             localeIdentifier: localeIdentifier,
             modelIdentifier: effectiveModelIdentifier,
             formats: selectedFormats.intersection(Self.textSidecarFormats),
-            attachCaptionedVideoToSource: true,
+            attachCaptionedVideoToSource: attachCaptionedVideoToSource,
             chunkSeconds: WhisperModelPreset.isGeminiTranscribe(effectiveModelIdentifier) || WhisperModelPreset.usesLongFormInference(effectiveModelIdentifier)
                 ? 0
                 : Self.automaticChunkSeconds,
@@ -904,6 +1017,18 @@ final class TranscriptionStore: ObservableObject {
                 configuration: configuration,
                 geminiCredentials: geminiCredentials
             )
+        }
+    }
+
+    /// Creates a directory, returning a user-facing reason when it cannot be
+    /// created. A launch-time failure here used to surface much later as a
+    /// four-word message at Start, with the path shown in Settings as if valid.
+    private static func ensureDirectory(_ url: URL) -> String? {
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return nil
+        } catch {
+            return "Tare could not prepare \(url.path): \(error.localizedDescription)"
         }
     }
 
@@ -1037,8 +1162,9 @@ final class TranscriptionStore: ObservableObject {
         try await Task.detached(priority: .userInitiated, operation: operation).value
     }
 
+    /// Every saved key, enabled or not.
     var geminiAPIKeyCount: Int {
-        geminiAPIKeyRecords.filter(\.isEnabled).count
+        geminiAPIKeyRecords.count
     }
 
     /// This is deliberately metadata-only. Reading Keychain secrets from a
@@ -1252,8 +1378,18 @@ final class TranscriptionStore: ObservableObject {
 
         do {
             let knownModelIDs = Set(WhisperModelPreset.local.map(\.id))
-            let localStatuses = try await modelManager.localModels()
+            let inventory = try await modelManager.localModels()
+            let localStatuses = inventory
                 .filter { knownModelIDs.contains($0.modelIdentifier) && $0.isAvailable }
+
+            // A status that omitted isAvailable or sizeBytes now decodes to
+            // unavailable, so an out-of-date model script looks like an empty
+            // cache. Say so instead of reporting nothing to download.
+            if localStatuses.isEmpty,
+               inventory.contains(where: { knownModelIDs.contains($0.modelIdentifier) }) {
+                modelErrorMessage = "Tare's model script did not report a usable status. It may be older than this build; reinstall the backend with script/setup_transcription_backend.sh."
+                return
+            }
 
             // Merge rather than replace: an entry this scan did not observe may
             // already reflect a completed download or removal.
@@ -1391,12 +1527,25 @@ final class TranscriptionStore: ObservableObject {
         defer {
             isRunning = false
             runTask = nil
-            statusMessage = "Ready"
+            activeJobID = nil
+            if batchOutcome == .running {
+                batchOutcome = .finished(
+                    completed: jobs.filter { $0.status == .completed }.count,
+                    failed: jobs.filter { $0.status == .failed }.count,
+                    cancelled: jobs.filter { $0.status == .cancelled }.count
+                )
+            }
+            if let outcome = batchOutcome {
+                batchOutcome = nil
+                statusMessage = outcome.statusMessage
+            }
         }
 
         let jobIDs = jobs
             .filter { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
             .map(\.id)
+        batchTotalCount = jobIDs.count
+        batchOutcome = .running
 
         let batchGeminiCredentials: [GeminiAPIKeyCredential]?
         if WhisperModelPreset.isGeminiTranscribe(configuration.modelIdentifier) {
@@ -1422,18 +1571,17 @@ final class TranscriptionStore: ObservableObject {
 
         let namingAPIKey = configuration.smartNamingEnabled ? await readFreeLLMAPIKey() : nil
 
-        for id in jobIDs {
+        for (index, id) in jobIDs.enumerated() {
             if Task.isCancelled {
-                markQueuedJobsCancelled()
+                markQueuedJobsCancelled(in: jobIDs)
                 return
             }
-
-            selectedJobID = id
 
             do {
                 updateJob(id) { job in
                     job.status = .extractingAudio
                     job.progress = 0.08
+                    job.chunkProgress = nil
                     job.errorMessage = nil
                     job.outputURLs = []
                     job.transcript = nil
@@ -1444,6 +1592,10 @@ final class TranscriptionStore: ObservableObject {
                 guard let sourceURL = jobs.first(where: { $0.id == id })?.sourceURL else {
                     continue
                 }
+
+                let jobName = sourceURL.deletingPathExtension().lastPathComponent
+                activeJobID = id
+                statusMessage = "[\(index + 1) of \(jobIDs.count)] \(jobName) — Extracting audio"
 
                 guard let audioExtractor else {
                     throw WhisperTranscriptionError.pythonMissing
@@ -1493,6 +1645,7 @@ final class TranscriptionStore: ObservableObject {
                 updateJob(id) { job in
                     job.status = .transcribing
                     job.progress = 0.2
+                    job.chunkProgress = nil
                 }
 
                 let transcript: Transcript
@@ -1511,10 +1664,18 @@ final class TranscriptionStore: ObservableObject {
                         progress: { [weak self] progress in
                             Task { @MainActor [weak self] in
                                 guard let self else { return }
+                                if let failure = progress.credentialFailure {
+                                    self.geminiCredentialFailureMessage =
+                                        "\(failure.label) failed: \(failure.reason)"
+                                }
                                 self.statusMessage = progress.phase
                                 self.updateJob(id) { job in
                                     let fraction = Double(progress.completedChunks) / Double(max(progress.totalChunks, 1))
                                     job.progress = min(0.86, 0.2 + fraction * 0.66)
+                                    job.chunkProgress = ChunkProgress(
+                                        completed: progress.completedChunks,
+                                        total: progress.totalChunks
+                                    )
                                 }
                             }
                         },
@@ -1528,6 +1689,7 @@ final class TranscriptionStore: ObservableObject {
                     guard let whisperService else {
                         throw WhisperTranscriptionError.pythonMissing
                     }
+                    statusMessage = "[\(index + 1) of \(jobIDs.count)] \(jobName) — Transcribing"
                     transcript = try await whisperService.transcribe(
                         audioURL: audioURL,
                         sourceName: sourceURL.lastPathComponent,
@@ -1535,7 +1697,21 @@ final class TranscriptionStore: ObservableObject {
                         modelIdentifier: configuration.modelIdentifier,
                         chunkSeconds: configuration.chunkSeconds,
                         chunkWorkerCount: configuration.chunkWorkerCount,
-                        wordTimestamps: configuration.requiresWordTimestamps
+                        wordTimestamps: configuration.requiresWordTimestamps,
+                        progress: { [weak self] update in
+                            Task { @MainActor [weak self] in
+                                guard let self else { return }
+                                self.statusMessage = "[\(index + 1) of \(jobIDs.count)] \(jobName) — \(update.phase)"
+                                guard update.totalChunks > 0 else { return }
+                                self.updateJob(id) { job in
+                                    job.progress = min(0.86, 0.2 + update.fraction * 0.66)
+                                    job.chunkProgress = ChunkProgress(
+                                        completed: update.completedChunks,
+                                        total: update.totalChunks
+                                    )
+                                }
+                            }
+                        }
                     )
                 }
 
@@ -1575,7 +1751,7 @@ final class TranscriptionStore: ObservableObject {
                     job.errorMessage = "Cancelled"
                     job.completedAt = Date()
                 }
-                markQueuedJobsCancelled()
+                markQueuedJobsCancelled(in: jobIDs)
                 return
             } catch {
                 // Tearing down a subprocess surfaces as a non-zero exit rather
@@ -1587,7 +1763,7 @@ final class TranscriptionStore: ObservableObject {
                         job.errorMessage = "Cancelled"
                         job.completedAt = Date()
                     }
-                    markQueuedJobsCancelled()
+                    markQueuedJobsCancelled(in: jobIDs)
                     return
                 }
                 updateJob(id) { job in
@@ -1697,8 +1873,13 @@ final class TranscriptionStore: ObservableObject {
         mutate(&jobs[index])
     }
 
-    private func markQueuedJobsCancelled() {
-        for id in jobs.filter({ !$0.status.isTerminal }).map(\.id) {
+    /// Marks the jobs this batch was going to run as cancelled.
+    ///
+    /// Only the snapshot is touched, so a file added after the batch started is
+    /// left queued rather than reported as cancelled when it never ran.
+    private func markQueuedJobsCancelled(in batchIDs: [TranscriptionJob.ID]) {
+        let batchIDSet = Set(batchIDs)
+        for id in jobs.filter({ !$0.status.isTerminal && batchIDSet.contains($0.id) }).map(\.id) {
             updateJob(id) { job in
                 job.status = .cancelled
                 job.errorMessage = "Cancelled"

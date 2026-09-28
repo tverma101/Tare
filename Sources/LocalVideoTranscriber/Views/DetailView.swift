@@ -21,8 +21,9 @@ private struct EmptyQueueView: View {
     var body: some View {
         VStack(spacing: 18) {
             Image(systemName: store.dropIsTargeted ? "arrow.down.doc.fill" : "film.stack")
-                .font(.system(size: 56, weight: .regular))
+                .imageScale(.large)
                 .foregroundStyle(store.dropIsTargeted ? .blue : .secondary)
+                .accessibilityHidden(true)
 
             Text(store.dropIsTargeted ? "Drop to Add" : "No Files")
                 .font(.title2)
@@ -86,6 +87,9 @@ private struct DetailHeader: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(job.sourceURL.deletingLastPathComponent().path)
+                    .textSelection(.enabled)
 
                 if let linkedTranscriptURL = job.linkedTranscriptURL {
                     Button {
@@ -131,12 +135,23 @@ private struct JobStatusCard: View {
                     Button {
                         store.retrySelectedJob()
                     } label: {
-                        Label("Retry", systemImage: "arrow.clockwise")
+                        Label(job.status == .cancelled ? "Requeue" : "Retry", systemImage: "arrow.clockwise")
                     }
+                    .help(store.isRunning
+                        ? "Return this job to the queue. It will run when you press Start again."
+                        : "Return this job to the queue, then press Start.")
                 }
             }
 
             ProgressView(value: job.progress)
+                .accessibilityLabel("\(job.displayName) progress")
+                .accessibilityValue(progressDescription)
+
+            if let chunks = job.chunkProgress, chunks.total > 1 {
+                Text("Chunk \(chunks.completed) of \(chunks.total)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
 
             JobTimingView(job: job)
 
@@ -154,6 +169,14 @@ private struct JobStatusCard: View {
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
+
+    private var progressDescription: String {
+        var parts = [job.status.displayName, "\(Int((job.progress * 100).rounded())) percent"]
+        if let chunks = job.chunkProgress, chunks.total > 1 {
+            parts.append("chunk \(chunks.completed) of \(chunks.total)")
+        }
+        return parts.joined(separator: ", ")
+    }
 }
 
 private struct JobTimingView: View {
@@ -161,36 +184,59 @@ private struct JobTimingView: View {
 
     var body: some View {
         if let startedAt = job.startedAt {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let referenceDate = job.completedAt ?? context.date
-                let elapsed = max(0, referenceDate.timeIntervalSince(startedAt))
-
-                HStack(spacing: 14) {
-                    Label("Elapsed \(formatDuration(elapsed))", systemImage: "timer")
-
-                    if let completedAt = job.completedAt {
-                        Text("Finished \(completedAt.formatted(date: .omitted, time: .shortened))")
-                    } else if let remaining = estimatedRemaining(elapsed: elapsed) {
-                        Label("ETA \(formatDuration(remaining))", systemImage: "hourglass")
-                    } else {
-                        Label("ETA estimating", systemImage: "hourglass")
-                    }
-
-                    Spacer()
+            if job.status.isTerminal, let completedAt = job.completedAt {
+                // A finished job must not keep a 1 Hz redraw loop alive.
+                timingRow(
+                    elapsed: max(0, completedAt.timeIntervalSince(startedAt)),
+                    finished: completedAt
+                )
+            } else {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    timingRow(elapsed: max(0, context.date.timeIntervalSince(startedAt)))
                 }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
             }
         }
     }
 
+    private func timingRow(elapsed: TimeInterval, finished: Date? = nil) -> some View {
+        HStack(spacing: 14) {
+            Label("Elapsed \(Self.formatDuration(elapsed))", systemImage: "timer")
+
+            if let finished {
+                Text("Finished \(finished.formatted(date: .omitted, time: .shortened))")
+                    .frame(width: Self.etaWidth, alignment: .leading)
+            } else if let remaining = estimatedRemaining(elapsed: elapsed) {
+                Label("ETA \(Self.formatDuration(remaining))", systemImage: "hourglass")
+                    .frame(width: Self.etaWidth, alignment: .leading)
+            } else {
+                // A fixed-width slot keeps the row from jumping when the estimate
+                // resolves, since the text itself changes width.
+                Text("ETA —")
+                    .foregroundStyle(.tertiary)
+                    .frame(width: Self.etaWidth, alignment: .leading)
+            }
+
+            Spacer()
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+
+    private static let etaWidth: CGFloat = 96
+
+    /// Extrapolates from measured progress.
+    ///
+    /// Progress used to sit at a fixed 20% for the whole local transcription, so
+    /// this returned a constant multiple of elapsed time — an estimate that could
+    /// never converge. It is only meaningful once real per-chunk progress exists.
     private func estimatedRemaining(elapsed: TimeInterval) -> TimeInterval? {
         guard !job.status.isTerminal else { return nil }
         guard job.progress > 0.03, job.progress < 1 else { return nil }
+        guard job.chunkProgress != nil || job.status == .exporting else { return nil }
         return max(0, elapsed * (1 - job.progress) / job.progress)
     }
 
-    private func formatDuration(_ seconds: TimeInterval) -> String {
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
         let rounded = max(0, Int(seconds.rounded()))
         let hours = rounded / 3600
         let minutes = (rounded % 3600) / 60
@@ -238,6 +284,8 @@ private struct ExportOptionsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(store.currentOutputDirectory.path)
+                .textSelection(.enabled)
 
             Text(store.lastOutputDirectory == nil
                  ? "Each batch gets its own named folder inside the configured output location."
@@ -266,6 +314,8 @@ private struct ExportOptionsView: View {
 
 private struct TranscriptOutputView: View {
     let job: TranscriptionJob
+    @State private var isShowingFullTranscript = false
+    private static let previewCharacterLimit = 4_000
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -286,14 +336,43 @@ private struct TranscriptOutputView: View {
             }
 
             if let transcript = job.transcript, !transcript.fullText.isEmpty {
-                ScrollView(.vertical) {
-                    Text(transcript.fullText)
+                // No nested scroller: the inner one competed with the page for
+                // scroll events, which made the panels below unreachable while
+                // the pointer was over the text. A long transcript is capped and
+                // opened in full from the exported file or a sheet.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(String(transcript.fullText.prefix(Self.previewCharacterLimit)))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.trailing, 4)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if transcript.fullText.count > Self.previewCharacterLimit {
+                        HStack(spacing: 10) {
+                            Text("Preview limited to \(Self.previewCharacterLimit) characters.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            Button("Show Full Transcript") {
+                                isShowingFullTranscript = true
+                            }
+                            .buttonStyle(.link)
+                        }
+                    }
                 }
-                .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 280, alignment: .topLeading)
-                .scrollIndicators(.automatic)
+                .padding(10)
+                .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
+                .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                .sheet(isPresented: $isShowingFullTranscript) {
+                    ScrollView {
+                        Text(transcript.fullText)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(20)
+                    }
+                }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     Label(emptyStateTitle, systemImage: emptyStateIcon)

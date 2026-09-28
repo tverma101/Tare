@@ -29,10 +29,14 @@ public struct GeminiAPIKeyRecord: Identifiable, Codable, Hashable, Sendable {
 public struct GeminiAPIKeyCredential: Hashable, Sendable {
     public let id: UUID
     public let apiKey: String
+    /// The saved record's label. Messages that name a credential use this
+    /// instead of the key, which must never reach a log or the UI.
+    public let label: String
 
-    public init(id: UUID, apiKey: String) {
+    public init(id: UUID, apiKey: String, label: String = "Gemini key") {
         self.id = id
         self.apiKey = apiKey
+        self.label = label
     }
 }
 
@@ -67,6 +71,12 @@ public enum GeminiAPIKeyStoreError: Error, LocalizedError, Hashable, Sendable {
 /// context, and the unchecked marker keeps the credential value scoped to the
 /// operation that requested it.
 public final class GeminiAPIKeyStore: @unchecked Sendable {
+    /// Every mutation is a read-modify-write cycle over one preferences blob,
+    /// and the macOS client dispatches several of them from detached workers.
+    /// Serializing them here keeps a `markUsed` from writing back a snapshot
+    /// taken before the user's reorder, silently undoing it.
+    private static let mutationQueue = DispatchQueue(label: "com.tejas.Tare.gemini-api-key-metadata")
+
     private let defaults: UserDefaults
     private let metadataKey: String
     private let keychainService: String
@@ -88,6 +98,45 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
     /// Reads metadata without silently turning a damaged preferences record
     /// into an empty key list that could overwrite the user's inventory.
     public func loadRecords() throws -> [GeminiAPIKeyRecord] {
+        try Self.mutationQueue.sync { try readRecords() }
+    }
+
+    @discardableResult
+    public func add(label: String, apiKey: String) throws -> GeminiAPIKeyRecord {
+        try Self.mutationQueue.sync { try insertRecord(label: label, apiKey: apiKey) }
+    }
+
+    public func delete(_ record: GeminiAPIKeyRecord) throws {
+        try Self.mutationQueue.sync { try removeRecord(record) }
+    }
+
+    public func setEnabled(_ isEnabled: Bool, for record: GeminiAPIKeyRecord) throws {
+        try Self.mutationQueue.sync { try setEnabledLocked(isEnabled, for: record) }
+    }
+
+    public func move(fromOffsets: IndexSet, toOffset: Int) throws {
+        try Self.mutationQueue.sync { try moveLocked(fromOffsets: fromOffsets, toOffset: toOffset) }
+    }
+
+    public func activeCredentials() throws -> [GeminiAPIKeyCredential] {
+        try Self.mutationQueue.sync { try activeCredentialsLocked() }
+    }
+
+    public func markUsed(_ id: UUID) {
+        Self.mutationQueue.sync {
+            guard var updatedRecords = try? readRecords() else { return }
+            guard let index = updatedRecords.firstIndex(where: { $0.id == id }) else { return }
+            updatedRecords[index].lastUsedAt = Date()
+            try? save(updatedRecords)
+        }
+    }
+
+    // MARK: - Serialized bodies
+
+    // These run while `mutationQueue` is held, so they read through
+    // `readRecords` rather than the queue-synchronized `loadRecords`.
+
+    private func readRecords() throws -> [GeminiAPIKeyRecord] {
         guard let data = defaults.data(forKey: metadataKey) else { return [] }
         do {
             return try JSONDecoder().decode([GeminiAPIKeyRecord].self, from: data)
@@ -96,8 +145,7 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
         }
     }
 
-    @discardableResult
-    public func add(label: String, apiKey: String) throws -> GeminiAPIKeyRecord {
+    private func insertRecord(label: String, apiKey: String) throws -> GeminiAPIKeyRecord {
         let normalizedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedKey.isEmpty else { throw GeminiAPIKeyStoreError.emptyKey }
         guard normalizedKey.count >= 8,
@@ -105,7 +153,7 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
             throw GeminiAPIKeyStoreError.invalidKey
         }
 
-        let existingRecords = try loadRecords()
+        let existingRecords = try readRecords()
         for record in existingRecords {
             if let existingKey = try secret(for: record.id), existingKey == normalizedKey {
                 throw GeminiAPIKeyStoreError.duplicateKey
@@ -128,8 +176,8 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
         return record
     }
 
-    public func delete(_ record: GeminiAPIKeyRecord) throws {
-        let existingRecords = try loadRecords()
+    private func removeRecord(_ record: GeminiAPIKeyRecord) throws {
+        let existingRecords = try readRecords()
         guard existingRecords.contains(where: { $0.id == record.id }) else { return }
 
         // Save metadata first, and restore it if Keychain deletion fails, so
@@ -143,8 +191,8 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
         }
     }
 
-    public func setEnabled(_ isEnabled: Bool, for record: GeminiAPIKeyRecord) throws {
-        var updatedRecords = try loadRecords()
+    private func setEnabledLocked(_ isEnabled: Bool, for record: GeminiAPIKeyRecord) throws {
+        var updatedRecords = try readRecords()
         guard let index = updatedRecords.firstIndex(where: { $0.id == record.id }) else { return }
         if isEnabled, try secret(for: record.id) == nil {
             throw GeminiAPIKeyStoreError.missingSecret
@@ -153,8 +201,8 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
         try save(updatedRecords)
     }
 
-    public func move(fromOffsets: IndexSet, toOffset: Int) throws {
-        var updatedRecords = try loadRecords()
+    private func moveLocked(fromOffsets: IndexSet, toOffset: Int) throws {
+        var updatedRecords = try readRecords()
         let movingIndices = fromOffsets.sorted()
         let moving = movingIndices.compactMap { index in
             updatedRecords.indices.contains(index) ? updatedRecords[index] : nil
@@ -168,20 +216,13 @@ public final class GeminiAPIKeyStore: @unchecked Sendable {
         try save(updatedRecords)
     }
 
-    public func activeCredentials() throws -> [GeminiAPIKeyCredential] {
-        try loadRecords()
+    private func activeCredentialsLocked() throws -> [GeminiAPIKeyCredential] {
+        try readRecords()
             .filter(\.isEnabled)
             .compactMap { record in
                 guard let apiKey = try secret(for: record.id) else { return nil }
-                return GeminiAPIKeyCredential(id: record.id, apiKey: apiKey)
+                return GeminiAPIKeyCredential(id: record.id, apiKey: apiKey, label: record.label)
             }
-    }
-
-    public func markUsed(_ id: UUID) {
-        guard var updatedRecords = try? loadRecords() else { return }
-        guard let index = updatedRecords.firstIndex(where: { $0.id == id }) else { return }
-        updatedRecords[index].lastUsedAt = Date()
-        try? save(updatedRecords)
     }
 
     private func secret(for id: UUID) throws -> String? {

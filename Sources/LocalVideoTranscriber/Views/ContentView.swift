@@ -26,21 +26,41 @@ struct ContentView: View {
                     } label: {
                         Label("Remove", systemImage: "minus")
                     }
-                    .disabled(store.selectedJobID == nil || store.isRunning || store.isScanning || store.isOrganizing)
+                    .disabled(store.selectedJobID == nil || store.isScanning || store.isOrganizing)
+                    .help(store.selectedJobID == nil
+                        ? "Select a file in the queue first"
+                        : "Remove from the queue. Output files already written are kept.")
+                    .keyboardShortcut(.delete, modifiers: [.command])
                 }
 
                 ToolbarItemGroup {
                     Button {
-                        store.isRunning ? store.cancelBatch() : store.startBatch()
+                        if store.isRunning || store.isPreparingModel {
+                            store.cancelBatch()
+                        } else {
+                            store.startBatch()
+                        }
                     } label: {
-                        Label(store.isRunning ? "Cancel" : "Start", systemImage: store.isRunning ? "stop.fill" : "play.fill")
+                        if store.isPreparingModel {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Label(
+                            store.isRunning || store.isPreparingModel ? "Cancel" : "Start",
+                            systemImage: store.isRunning || store.isPreparingModel ? "stop.fill" : "play.fill"
+                        )
                     }
-                    .disabled(!store.canStart && !store.isRunning)
+                    .disabled(!store.isRunning && !store.isPreparingModel && !store.canStart)
+                    .help(store.isPreparingModel
+                        ? "Cancel the model check"
+                        : store.isRunning ? "Stop the batch" : "Start the queued files")
                 }
 
                 ToolbarItem(placement: .status) {
                     Text(store.statusMessage)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             .onDrop(

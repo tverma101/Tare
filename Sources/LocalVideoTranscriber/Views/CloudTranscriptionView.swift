@@ -5,6 +5,10 @@ struct CloudTranscriptionView: View {
     @ObservedObject var store: TranscriptionStore
     @State private var keyLabel = "Google Gemini key"
     @State private var keyInput = ""
+    /// The saved-key count when the last add was requested. `addGeminiAPIKey`
+    /// only enqueues work, so the field is cleared from the count observer and
+    /// only when the add actually landed.
+    @State private var keyCountAtPendingAdd: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -99,14 +103,9 @@ struct CloudTranscriptionView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 8) {
-                TextField("Label", text: $keyLabel)
-                    .frame(width: 180)
-                SecureField("Paste Gemini API key", text: $keyInput)
-                Button("Add key") {
-                    addKey()
-                }
-                .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            ViewThatFits(in: .horizontal) {
+                addKeyRow(compact: false)
+                addKeyRow(compact: true)
             }
 
             HStack(spacing: 10) {
@@ -159,6 +158,42 @@ struct CloudTranscriptionView: View {
         }
         .padding(16)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .onChange(of: store.geminiAPIKeyRecords.count) { _, newCount in
+            guard let pendingCount = keyCountAtPendingAdd, newCount > pendingCount else { return }
+            keyCountAtPendingAdd = nil
+            keyInput = ""
+        }
+    }
+
+    /// Both branches bind the same `@State`, so a narrow window only changes the
+    /// layout and never discards what was typed.
+    @ViewBuilder
+    private func addKeyRow(compact: Bool) -> some View {
+        if compact {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Label", text: $keyLabel)
+                SecureField("Paste Gemini API key", text: $keyInput)
+                Button("Add key") {
+                    addKey()
+                }
+                .disabled(trimmedKeyInput.isEmpty)
+            }
+        } else {
+            HStack(spacing: 8) {
+                TextField("Label", text: $keyLabel)
+                    .frame(width: 180)
+                SecureField("Paste Gemini API key", text: $keyInput)
+                    .frame(minWidth: 160)
+                Button("Add key") {
+                    addKey()
+                }
+                .disabled(trimmedKeyInput.isEmpty)
+            }
+        }
+    }
+
+    private var trimmedKeyInput: String {
+        keyInput.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func keyRow(_ record: GeminiAPIKeyRecord, index: Int) -> some View {
@@ -177,6 +212,8 @@ struct CloudTranscriptionView: View {
                 HStack(spacing: 6) {
                     Text(record.label)
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if store.geminiVerifiedCredentialIDs.contains(record.id) {
                         Image(systemName: "checkmark.seal.fill")
                             .foregroundStyle(.green)
@@ -186,6 +223,16 @@ struct CloudTranscriptionView: View {
                 Text("••••\(record.lastFour)")
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
+                if let lastUsedAt = record.lastUsedAt {
+                    HStack(spacing: 3) {
+                        Text("Last used")
+                        Text(lastUsedAt, style: .relative)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help("Last used \(lastUsedAt.formatted(date: .abbreviated, time: .shortened))")
+                }
             }
 
             Spacer()
@@ -363,10 +410,12 @@ struct CloudTranscriptionView: View {
     }
 
     private func addKey() {
-        let previousCount = store.geminiAPIKeyRecords.count
+        let pendingCount = store.geminiAPIKeyRecords.count
+        guard !trimmedKeyInput.isEmpty else { return }
+        // Saving is asynchronous, so the field is cleared by the count observer
+        // once the key is really stored. A rejected key leaves it in place with
+        // the store's error so the paste is not silently lost.
+        keyCountAtPendingAdd = pendingCount
         store.addGeminiAPIKey(label: keyLabel, apiKey: keyInput)
-        if store.geminiAPIKeyRecords.count > previousCount {
-            keyInput = ""
-        }
     }
 }

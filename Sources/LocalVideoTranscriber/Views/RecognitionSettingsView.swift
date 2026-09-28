@@ -19,31 +19,18 @@ struct RecognitionSettingsView: View {
                 .background(.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Picker("Model", selection: $store.modelIdentifier) {
-                    if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),
-                       selectedPreset.isCloud {
-                        Text("\(selectedPreset.displayName) · Configure in Cloud")
-                            .tag(selectedPreset.id)
-                    } else if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),
-                              !store.installedModelPresets.contains(selectedPreset) {
-                        Text("\(selectedPreset.displayName) · Unavailable locally")
-                            .tag(selectedPreset.id)
-                    }
-
-                    ForEach(store.installedModelPresets) { preset in
-                        let availability = store.modelStatuses[preset.id].map {
-                            $0.isAvailable ? " · Installed" : ""
-                        } ?? ""
-                        Text("\(preset.displayName) - \(preset.detail)\(availability)")
-                            .tag(preset.id)
-                    }
+            // Both branches keep the picker and the free-text field, so the custom
+            // model ID escape hatch survives even in the narrowest container.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    modelPicker
+                    modelIdentifierField
                 }
-                .frame(width: 330)
 
-                TextField("Model ID", text: $store.modelIdentifier)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 260)
+                VStack(alignment: .leading, spacing: 6) {
+                    modelPicker
+                    modelIdentifierField
+                }
             }
 
             if let modelAvailabilityText {
@@ -63,18 +50,16 @@ struct RecognitionSettingsView: View {
                     .foregroundStyle(.orange)
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Picker("Language", selection: $store.localeIdentifier) {
-                    ForEach(WhisperLanguagePreset.all) { preset in
-                        Text(preset.displayName)
-                            .tag(preset.id)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    languagePicker
+                    languageCodeField
                 }
-                .frame(width: 220)
 
-                TextField("Language Code", text: $store.localeIdentifier)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
+                VStack(alignment: .leading, spacing: 6) {
+                    languagePicker
+                    languageCodeField
+                }
             }
 
             if let warningText {
@@ -110,6 +95,68 @@ struct RecognitionSettingsView: View {
                 .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var modelPicker: some View {
+        Picker("Model", selection: $store.modelIdentifier) {
+            if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),
+               selectedPreset.isCloud {
+                Text("\(selectedPreset.displayName) · Configure in Cloud")
+                    .tag(selectedPreset.id)
+            } else if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),
+                      !store.installedModelPresets.contains(selectedPreset) {
+                Text("\(selectedPreset.displayName) · Unavailable locally")
+                    .tag(selectedPreset.id)
+            } else if showsCustomModelRow {
+                Text("\(store.modelIdentifier) · Custom")
+                    .tag(store.modelIdentifier)
+            }
+
+            ForEach(store.installedModelPresets) { preset in
+                let availability = store.modelStatuses[preset.id].map {
+                    $0.isAvailable ? " · Installed" : ""
+                } ?? ""
+                Text("\(preset.displayName) - \(preset.detail)\(availability)")
+                    .tag(preset.id)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var modelIdentifierField: some View {
+        TextField("Model ID", text: $store.modelIdentifier)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: .infinity)
+    }
+
+    private var languagePicker: some View {
+        Picker("Language", selection: $store.localeIdentifier) {
+            ForEach(WhisperLanguagePreset.all) { preset in
+                Text(preset.displayName)
+                    .tag(preset.id)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var languageCodeField: some View {
+        TextField("Language Code", text: $store.localeIdentifier)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: .infinity)
+    }
+
+    // A custom Hugging Face ID matches no other tag, which would leave the picker
+    // blank. Only add the row when nothing above already carries the selection.
+    private var showsCustomModelRow: Bool {
+        let identifier = store.modelIdentifier
+        guard !identifier.isEmpty else { return false }
+
+        if let selectedPreset = WhisperModelPreset.preset(for: identifier),
+           selectedPreset.isCloud || !store.installedModelPresets.contains(selectedPreset) {
+            return false
+        }
+
+        return !store.installedModelPresets.contains { $0.id == identifier }
     }
 
     private var warningText: String? {
