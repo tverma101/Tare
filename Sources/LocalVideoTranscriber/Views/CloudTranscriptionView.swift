@@ -25,7 +25,9 @@ struct CloudTranscriptionView: View {
                     freeTierCard
                     privacyCard
                 }
-                .padding(24)
+                .padding(Space.page)
+                .frame(maxWidth: Metric.contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -43,7 +45,7 @@ struct CloudTranscriptionView: View {
 
             if store.isUsingGeminiTranscription {
                 Label("Selected", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Palette.success)
             }
         }
         .padding(.horizontal, 24)
@@ -126,7 +128,7 @@ struct CloudTranscriptionView: View {
                         systemImage: "checkmark.circle.fill"
                     )
                     .font(.caption)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Palette.success)
                 }
             }
 
@@ -140,14 +142,14 @@ struct CloudTranscriptionView: View {
             if let cloudError = store.cloudErrorMessage, store.geminiVerificationMessage != cloudError {
                 Label(cloudError, systemImage: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if store.geminiAPIKeyRecords.isEmpty {
                 Label("Add an enabled key to make cloud transcription ready.", systemImage: "info.circle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Palette.warning)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(store.geminiAPIKeyRecords.enumerated()), id: \.element.id) { index, record in
@@ -207,6 +209,9 @@ struct CloudTranscriptionView: View {
             )
             .labelsHidden()
             .help(record.isEnabled ? "Disable this key" : "Enable this key")
+            .accessibilityLabel(record.isEnabled
+                ? "Disable \(record.label)"
+                : "Enable \(record.label)")
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -216,8 +221,9 @@ struct CloudTranscriptionView: View {
                         .truncationMode(.tail)
                     if store.geminiVerifiedCredentialIDs.contains(record.id) {
                         Image(systemName: "checkmark.seal.fill")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Palette.success)
                             .help("Verified for gemini-3.5-transcribe")
+                            .accessibilityLabel("Verified for gemini-3.5-transcribe")
                     }
                 }
                 Text("••••\(record.lastFour)")
@@ -237,43 +243,34 @@ struct CloudTranscriptionView: View {
 
             Spacer()
 
-            Button {
-                Task {
-                    await store.verifyGeminiAPIKey(record)
+            Menu {
+                Button("Verify This Key") {
+                    Task { await store.verifyGeminiAPIKey(record) }
+                }
+                .disabled(!record.isEnabled || store.isVerifyingGeminiKeys)
+
+                Button("Try Earlier") {
+                    store.moveGeminiAPIKeys(fromOffsets: IndexSet(integer: index), toOffset: index - 1)
+                }
+                .disabled(index == 0)
+
+                Button("Try Later") {
+                    store.moveGeminiAPIKeys(fromOffsets: IndexSet(integer: index), toOffset: index + 2)
+                }
+                .disabled(index == store.geminiAPIKeyRecords.count - 1)
+
+                Divider()
+
+                Button("Remove This Key", role: .destructive) {
+                    store.removeGeminiAPIKey(record)
                 }
             } label: {
-                Image(systemName: "checkmark.shield")
+                Label("Actions for \(record.label)", systemImage: "ellipsis.circle")
+                    .labelStyle(.iconOnly)
             }
-            .buttonStyle(.borderless)
-            .disabled(!record.isEnabled || store.isVerifyingGeminiKeys)
-            .help("Verify this key can use gemini-3.5-transcribe")
-
-            Button {
-                store.moveGeminiAPIKeys(fromOffsets: IndexSet(integer: index), toOffset: index - 1)
-            } label: {
-                Image(systemName: "chevron.up")
-            }
-            .buttonStyle(.borderless)
-            .disabled(index == 0)
-            .help("Try this key earlier")
-
-            Button {
-                store.moveGeminiAPIKeys(fromOffsets: IndexSet(integer: index), toOffset: index + 2)
-            } label: {
-                Image(systemName: "chevron.down")
-            }
-            .buttonStyle(.borderless)
-            .disabled(index == store.geminiAPIKeyRecords.count - 1)
-            .help("Try this key later")
-
-            Button {
-                store.removeGeminiAPIKey(record)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.red)
-            .help("Remove this key from Tare")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Actions for \(record.label)")
         }
         .padding(.vertical, 4)
     }
@@ -291,7 +288,7 @@ struct CloudTranscriptionView: View {
                     Text(mode.displayName).tag(mode)
                 }
             }
-            .frame(width: 300)
+            .frame(maxWidth: .infinity)
 
             Text(store.geminiMode == .smart
                  ? "Smart mode is optional and optimizes the transcript for reading. It does not request word timestamps or speaker labels."
@@ -328,7 +325,7 @@ struct CloudTranscriptionView: View {
             if let validationMessage = store.geminiOptionsValidationMessage {
                 Label(validationMessage, systemImage: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -359,7 +356,7 @@ struct CloudTranscriptionView: View {
                 systemImage: "checkmark.shield"
             )
             .font(.caption)
-            .foregroundStyle(.green)
+            .foregroundStyle(Palette.success)
 
             Label(
                 "Example 2h 30m lecture with current options: \(examplePlan.summaryDescription).",
@@ -375,7 +372,7 @@ struct CloudTranscriptionView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .background(Palette.contentBackground, in: RoundedRectangle(cornerRadius: Radius.card))
     }
 
     private var freeTierCard: some View {
@@ -394,7 +391,7 @@ struct CloudTranscriptionView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
-        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .background(Palette.warningFill, in: RoundedRectangle(cornerRadius: Radius.card))
     }
 
     private var privacyCard: some View {

@@ -5,7 +5,11 @@ struct DetailView: View {
     @ObservedObject var store: TranscriptionStore
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            StatusHeaderView(store: store)
+
+            StatusStripView(store: store)
+
             if let job = store.selectedJob {
                 JobDetailView(store: store, job: job)
             } else {
@@ -19,24 +23,38 @@ private struct EmptyQueueView: View {
     @ObservedObject var store: TranscriptionStore
 
     var body: some View {
-        VStack(spacing: 18) {
+        let isEmptyQueue = store.jobs.isEmpty
+
+        VStack(spacing: Space.group) {
             Image(systemName: store.dropIsTargeted ? "arrow.down.doc.fill" : "film.stack")
                 .imageScale(.large)
-                .foregroundStyle(store.dropIsTargeted ? .blue : .secondary)
+                .foregroundStyle(store.dropIsTargeted ? Palette.active : Palette.textSecondary)
                 .accessibilityHidden(true)
 
-            Text(store.dropIsTargeted ? "Drop to Add" : "No Files")
-                .font(.title2)
-                .fontWeight(.semibold)
+            Text(store.dropIsTargeted ? "Drop to Add" : (isEmptyQueue ? "No Files" : "Nothing Selected"))
+                .font(Typography.pageTitle)
 
-            Button {
-                store.presentFilePicker()
-            } label: {
-                Label("Add Files", systemImage: "plus")
+            Text(store.dropIsTargeted
+                ? "Release to add these files to the queue."
+                : (isEmptyQueue
+                    ? "Add audio or video to start a batch. You can also drag files onto this window."
+                    : "Choose a file in the queue to see its status, transcript, and output files."))
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if isEmptyQueue {
+                Button {
+                    store.presentFilePicker()
+                } label: {
+                    Label("Add Files", systemImage: "plus")
+                }
+                .controlSize(.large)
             }
-            .controlSize(.large)
-
         }
+        .padding(Space.page)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -61,7 +79,7 @@ private struct JobDetailView: View {
 
                     OutputFilesView(store: store, job: job)
                 }
-                .padding(20)
+                .padding(Space.page)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -163,10 +181,10 @@ private struct JobStatusCard: View {
                 } icon: {
                     Image(systemName: "exclamationmark.triangle")
                 }
-                .foregroundStyle(.red)
+                .foregroundStyle(Palette.danger)
             }
         }
-        .padding(14)
+        .padding(Space.group)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
@@ -307,7 +325,7 @@ private struct ExportOptionsView: View {
             ))
             .toggleStyle(.checkbox)
         }
-        .padding(14)
+        .padding(Space.group)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 }
@@ -361,16 +379,16 @@ private struct TranscriptOutputView: View {
                         }
                     }
                 }
-                .padding(10)
+                .padding(Space.close)
                 .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
-                .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                .background(Palette.textWellBackground, in: RoundedRectangle(cornerRadius: Radius.inline))
                 .sheet(isPresented: $isShowingFullTranscript) {
                     ScrollView {
                         Text(transcript.fullText)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
-                            .padding(20)
+                            .padding(Space.page)
                     }
                 }
             } else {
@@ -384,7 +402,7 @@ private struct TranscriptOutputView: View {
                 .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
             }
         }
-        .padding(14)
+        .padding(Space.group)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
@@ -486,7 +504,7 @@ private struct OutputFilesView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(Space.group)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }

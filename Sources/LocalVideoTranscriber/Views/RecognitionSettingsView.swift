@@ -13,10 +13,10 @@ struct RecognitionSettingsView: View {
                 } icon: {
                     Image(systemName: "exclamationmark.triangle")
                 }
-                .foregroundStyle(.red)
-                .padding(10)
+                .foregroundStyle(Palette.danger)
+                .padding(Space.close)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                .background(Palette.dangerFill, in: RoundedRectangle(cornerRadius: Radius.inline))
             }
 
             // Both branches keep the picker and the free-text field, so the custom
@@ -47,7 +47,7 @@ struct RecognitionSettingsView: View {
             if store.installedModelPresets.isEmpty && !store.isRefreshingModels && !store.isUsingGeminiTranscription {
                 Label("No supported local models found. Open Models to refresh or download one.", systemImage: "arrow.down.circle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Palette.warning)
             }
 
             ViewThatFits(in: .horizontal) {
@@ -65,7 +65,7 @@ struct RecognitionSettingsView: View {
             if let warningText {
                 Label(warningText, systemImage: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Palette.warning)
             }
 
             if WhisperModelPreset.isMossDiarize(store.modelIdentifier) {

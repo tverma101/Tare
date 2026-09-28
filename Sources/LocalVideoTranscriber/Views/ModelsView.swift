@@ -28,7 +28,7 @@ struct ModelsView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
+                        .padding(Space.page)
                     } else if store.installedModelPresets.isEmpty {
                         emptyLocalModels
                     } else {
@@ -55,11 +55,13 @@ struct ModelsView: View {
                             }
                             .padding(.top, 8)
                         }
-                        .padding(14)
-                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                        .padding(Space.group)
+                        .background(Palette.contentBackground, in: RoundedRectangle(cornerRadius: Radius.card))
                     }
                 }
-                .padding(24)
+                .padding(Space.page)
+                .frame(maxWidth: Metric.contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .task {
@@ -140,9 +142,9 @@ struct ModelsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(18)
+        .padding(Space.group)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .background(Palette.contentBackground, in: RoundedRectangle(cornerRadius: Radius.card))
     }
 
     private func unavailableSelectionNotice(_ preset: WhisperModelPreset, status: ModelStatus?) -> some View {
@@ -155,10 +157,10 @@ struct ModelsView: View {
         } icon: {
             Image(systemName: "exclamationmark.triangle")
         }
-        .foregroundStyle(.orange)
-        .padding(12)
+        .foregroundStyle(Palette.warning)
+        .padding(Space.group)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .background(Palette.warningFill, in: RoundedRectangle(cornerRadius: Radius.inline))
     }
 
     private func localModelRow(for preset: WhisperModelPreset) -> some View {
@@ -195,13 +197,13 @@ struct ModelsView: View {
                 if let note = preset.memoryRequirementNote {
                     Label(note, systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Palette.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let status {
                     Text("Installed · \(status.sizeDescription)")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Palette.success)
                 }
             }
 
@@ -224,7 +226,7 @@ struct ModelsView: View {
             .disabled(store.modelOperation != nil || store.isRefreshingModels || isRequired)
             .help(removalHelp(for: preset, isRequired: isRequired))
         }
-        .padding(12)
+        .padding(Space.group)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
@@ -277,13 +279,13 @@ struct ModelsView: View {
                 if let note = preset.memoryRequirementNote {
                     Label(note, systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Palette.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if needsRepair {
                     Text(status?.issueMessage ?? "Cached but not usable")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Palette.warning)
                 }
             }
 

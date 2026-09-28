@@ -379,8 +379,13 @@ final class TranscriptionStore: ObservableObject {
         }
     }
 
+    /// The job the user is inspecting.
+    ///
+    /// Returns nil when nothing is selected. It used to fall back to the first
+    /// job, so the detail pane could show a file the sidebar did not highlight
+    /// and that Remove was therefore disabled for.
     var selectedJob: TranscriptionJob? {
-        guard let selectedJobID else { return jobs.first }
+        guard let selectedJobID else { return nil }
         return jobs.first { $0.id == selectedJobID }
     }
 
@@ -422,8 +427,61 @@ final class TranscriptionStore: ObservableObject {
             && jobs.contains { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
     }
 
+    /// Which jobs the queue shows. A forty-file batch is unreadable without one.
+    enum QueueFilter: String, CaseIterable, Identifiable {
+        case all
+        case active
+        case queued
+        case completed
+        case failed
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .all: return "All"
+            case .active: return "Active"
+            case .queued: return "Queued"
+            case .completed: return "Done"
+            case .failed: return "Failed"
+            }
+        }
+
+        func matches(_ job: TranscriptionJob, activeJobID: TranscriptionJob.ID?) -> Bool {
+            switch self {
+            case .all:
+                return true
+            case .active:
+                return !job.status.isTerminal
+            case .queued:
+                return job.status == .queued
+            case .completed:
+                return job.status == .completed
+            case .failed:
+                return job.status == .failed || job.status == .cancelled
+            }
+        }
+    }
+
+    @Published var queueFilter: QueueFilter = .all
+
+    func count(for filter: QueueFilter) -> Int {
+        jobs.filter { filter.matches($0, activeJobID: activeJobID) }.count
+    }
+
+    var visibleJobs: [TranscriptionJob] {
+        jobs.filter { queueFilter.matches($0, activeJobID: activeJobID) }
+    }
+
     var completedCount: Int {
         jobs.filter { $0.status == .completed }.count
+    }
+
+    /// Whole-batch progress, so the status strip has something honest to show.
+    var batchProgress: Double {
+        guard batchTotalCount > 0 else { return 0 }
+        let finished = jobs.filter { $0.status.isTerminal }.count
+        return min(1, Double(finished) / Double(batchTotalCount))
     }
 
     var failedCount: Int {

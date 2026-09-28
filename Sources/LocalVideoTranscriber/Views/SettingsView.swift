@@ -51,7 +51,7 @@ struct SettingsView: View {
                     } icon: {
                         Image(systemName: "exclamationmark.triangle")
                     }
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Palette.danger)
                 }
 
                 Toggle("Create Batch Folder", isOn: $store.createBatchFolder)
