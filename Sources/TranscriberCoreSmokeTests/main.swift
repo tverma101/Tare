@@ -1425,6 +1425,22 @@ enum TranscriberCoreSmokeTests {
             WhisperTranscriptionService.parseChunkProgressLine("Finished chunk 0/0 (0%)") == nil,
             "A zero total cannot be used to compute a fraction."
         )
+        try expect(
+            WhisperTranscriptionService.parseChunkProgressLine("Finished chunk 7 of 7") == nil,
+            "A line without a slash is not a progress line."
+        )
+        try expect(
+            WhisperTranscriptionService.parseChunkProgressLine("Finished chunk") == nil,
+            "A truncated line is not a progress line."
+        )
+        try expect(
+            WhisperTranscriptionService.parseChunkProgressLine("Finished chunk -1/7 (0%)") == nil,
+            "A negative chunk index must not rewind the progress bar."
+        )
+        try expect(
+            WhisperTranscriptionService.parseChunkProgressLine("Finished chunk 7/3 (233%)") == nil,
+            "A completed count above the total must not report a fraction above one."
+        )
     }
 
     /// Provider error text is echoed into the UI, so credential-shaped content
@@ -1440,7 +1456,7 @@ enum TranscriberCoreSmokeTests {
         ]
 
         for (input, shouldRedact) in cases {
-            let output = GeminiTranscriptionService.redactCredentialsForTesting(input)
+            let output = GeminiTranscriptionService.redactingCredentialsInProviderText(input)
             try expect(
                 output.contains("[redacted]") == shouldRedact,
                 "Redaction of \"\(input)\" should be \(shouldRedact), got \(output)"

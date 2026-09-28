@@ -435,6 +435,7 @@ final class TranscriptionStore: ObservableObject {
             && !isScanning
             && !isOrganizing
             && !jobs.isEmpty
+            && isUsableFormatSelection(selectedFormats)
             && jobs.contains { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
     }
 
@@ -492,6 +493,13 @@ final class TranscriptionStore: ObservableObject {
         guard let selectedJobID else { return }
         guard !visibleJobs.contains(where: { $0.id == selectedJobID }) else { return }
         self.selectedJobID = visibleJobs.first?.id
+    }
+
+    /// Runs after any status change, since a job leaving the current filter is
+    /// just as able to strand the selection as changing the filter is.
+    private func reconcileSelectionAfterStatusChange() {
+        guard selectedJobID != nil else { return }
+        reconcileSelectionWithFilter()
     }
 
     func count(for filter: QueueFilter) -> Int {
@@ -1078,6 +1086,14 @@ final class TranscriptionStore: ObservableObject {
         geminiCredentials: [GeminiAPIKeyCredential]? = nil
     ) {
 
+        // Checked before anything is created and before isRunning is set: a
+        // refusal after that point would leave the flag stuck, because
+        // runBatch's defer is the only thing that clears it.
+        guard isUsableFormatSelection(selectedFormats) else {
+            statusMessage = "Choose at least one transcript file format"
+            return
+        }
+
         let queuedSourceURLs = jobs
             .filter { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
             .map(\.sourceURL)
@@ -1111,10 +1127,6 @@ final class TranscriptionStore: ObservableObject {
         statusMessage = "Saving to \(exportDirectory.lastPathComponent)"
 
         let requestedFormats = selectedFormats.intersection(ExportFormat.sidecarFormats)
-        guard isUsableFormatSelection(selectedFormats) else {
-            statusMessage = "Choose at least one transcript file format"
-            return
-        }
 
         let configuration = TranscriptionConfiguration(
             outputDirectory: exportDirectory,
@@ -1683,7 +1695,8 @@ final class TranscriptionStore: ObservableObject {
                 for id in jobIDs {
                     updateJob(id) { job in
                         job.status = .failed
-                        job.errorMessage = error.localizedDescription
+                        job.chunkProgress = nil
+                        job.errorMessage = GeminiTranscriptionService.redactingCredentialsInProviderText(error.localizedDescription)
                         job.completedAt = Date()
                     }
                 }
@@ -1719,6 +1732,7 @@ final class TranscriptionStore: ObservableObject {
 
                 let jobName = sourceURL.deletingPathExtension().lastPathComponent
                 activeJobID = id
+                geminiCredentialFailureMessage = nil
                 statusMessage = "[\(index + 1) of \(jobIDs.count)] \(jobName) — Extracting audio"
 
                 guard let audioExtractor else {
@@ -1896,7 +1910,7 @@ final class TranscriptionStore: ObservableObject {
                 updateJob(id) { job in
                     job.status = .failed
                     job.chunkProgress = nil
-                    job.errorMessage = error.localizedDescription
+                    job.errorMessage = GeminiTranscriptionService.redactingCredentialsInProviderText(error.localizedDescription)
                     job.completedAt = Date()
                 }
             }
@@ -1999,6 +2013,7 @@ final class TranscriptionStore: ObservableObject {
         }
 
         mutate(&jobs[index])
+        reconcileSelectionAfterStatusChange()
     }
 
     /// Marks the jobs this batch was going to run as cancelled.
@@ -2010,6 +2025,7 @@ final class TranscriptionStore: ObservableObject {
         for id in jobs.filter({ !$0.status.isTerminal && batchIDSet.contains($0.id) }).map(\.id) {
             updateJob(id) { job in
                 job.status = .cancelled
+                job.chunkProgress = nil
                 job.errorMessage = "Cancelled"
                 job.completedAt = Date()
             }

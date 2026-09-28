@@ -169,18 +169,12 @@ public final class WhisperTranscriptionService {
         )
     }
 
-    /// Reads the bridge script's own progress lines so the UI can show real
-    /// per-chunk progress instead of extrapolating from a fixed fraction.
-    ///
-    /// The script writes `Chunked transcription: N chunks, ...` once, then
-    /// `Finished chunk i/N (P%)` per chunk, both to stderr. The counts are
-    /// matched as whole numbers rather than read as loose digits, because
-    /// `Finished chunk 12/12 (100%)` contains seven digit characters and taking
-    /// the first two would report 1 of 2.
     /// Extracts `i` and `N` from a `Finished chunk i/N (P%)` line.
     ///
     /// The counts are read as whole numbers, not as loose digit characters,
-    /// because the line also contains a percentage and a two-digit chunk index.
+    /// because the line also carries a percentage and a two-digit index:
+    /// `Finished chunk 12/12 (100%)` contains seven digits, and taking the
+    /// first two would report 1 of 2.
     public static func parseChunkProgressLine(_ line: String) -> (completed: Int, total: Int)? {
         let prefix = "Finished chunk "
         guard line.hasPrefix(prefix) else { return nil }
@@ -192,7 +186,11 @@ public final class WhisperTranscriptionService {
         guard counts.count == 2,
               let completed = Int(counts[0]),
               let total = Int(counts[1]),
-              total > 0 else { return nil }
+              total > 0,
+              // A malformed line must not rewind the bar or report a fraction
+              // above one.
+              completed >= 0,
+              completed <= total else { return nil }
 
         return (completed, total)
     }

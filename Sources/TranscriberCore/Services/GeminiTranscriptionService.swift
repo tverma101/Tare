@@ -277,12 +277,11 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
     /// Tare never places a key in a request body, so this is defence in depth:
     /// a provider error message is echoed into the UI, and nothing should be able
     /// to make that echo a secret.
-    /// Exposed for the smoke suite; production callers use `truncated`.
-    public static func redactCredentialsForTesting(_ text: String) -> String {
-        redactingCredentials(text)
-    }
-
-    private static func redactingCredentials(_ text: String) -> String {
+    /// Strips credential-shaped content from provider-controlled text.
+    ///
+    /// Public so the store can apply it as a final guarantee before an error
+    /// reaches the screen, independent of which error type produced it.
+    public static func redactingCredentialsInProviderText(_ text: String) -> String {
         let patterns = [
             "AIza[0-9A-Za-z_-]{10,}",          // Google API key
             "sk-[A-Za-z0-9_-]{16,}",            // provider-style secret
@@ -304,7 +303,7 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
     }
 
     private static func truncated(_ message: String, limit: Int) -> String {
-        let normalized = redactingCredentials(
+        let normalized = redactingCredentialsInProviderText(
             message
                 .replacingOccurrences(of: "\n", with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1306,10 +1305,16 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         return "The provider returned an error response."
     }
 
+    /// Every provider-controlled string passes through here on its way to a
+    /// `GeminiHTTPError`, which is what surfaces in a job's error message. It
+    /// must redact, or a provider that echoes a credential in its error body
+    /// would put it on screen.
     private static func safeProviderMessage(_ message: String) -> String {
-        let normalized = message
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = redactingCredentialsInProviderText(
+            message
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         return String(normalized.prefix(300))
     }
 
