@@ -56,15 +56,9 @@ struct SettingsView: View {
 
                 Toggle("Create Batch Folder", isOn: $store.createBatchFolder)
 
-                Toggle("Save Plain Transcript", isOn: Binding(
-                    get: { store.savesTextTranscript },
-                    set: { store.setTextTranscriptEnabled($0) }
-                ))
-
-                Toggle("Save Timestamped Transcript", isOn: Binding(
-                    get: { store.savesTimestampedTranscript },
-                    set: { store.setTimestampedTranscriptEnabled($0) }
-                ))
+                Text("Transcript file formats are chosen in the Transcribe tab's Export panel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 Toggle("Embed subtitles into video sources", isOn: $store.attachCaptionedVideoToSource)
 

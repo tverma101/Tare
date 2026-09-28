@@ -789,30 +789,6 @@ final class TranscriptionStore: ObservableObject {
         }
     }
 
-    var savesTextTranscript: Bool {
-        selectedFormats.contains(.text)
-    }
-
-    func setTextTranscriptEnabled(_ isEnabled: Bool) {
-        if isEnabled {
-            selectedFormats.insert(.text)
-        } else {
-            selectedFormats.remove(.text)
-        }
-    }
-
-    var savesTimestampedTranscript: Bool {
-        selectedFormats.contains(.timestampedText)
-    }
-
-    func setTimestampedTranscriptEnabled(_ isEnabled: Bool) {
-        if isEnabled {
-            selectedFormats.insert(.timestampedText)
-        } else {
-            selectedFormats.remove(.timestampedText)
-        }
-    }
-
     private func cleanAndOrganizeMKVs(startAfter: Bool) async {
         guard canCleanAndOrganizeMKVs else {
             return
@@ -982,6 +958,7 @@ final class TranscriptionStore: ObservableObject {
                     return
                 }
                 cloudErrorMessage = nil
+                await reportCloudPlan()
                 startBatch(
                     effectiveModelIdentifier: modelIdentifier,
                     geminiCredentials: credentials
@@ -1023,6 +1000,45 @@ final class TranscriptionStore: ObservableObject {
         startBatch(effectiveModelIdentifier: modelIdentifier)
     }
 
+    /// Measures the queued sources before a cloud batch starts.
+    ///
+    /// Duration used to be measured only after a full audio extraction, so for a
+    /// long recording the user watched a spinner with no idea of the chunk count
+    /// or size until uploads were already under way. This is advisory: the
+    /// authoritative checks still run in the service, because a container can
+    /// report no duration while the extracted audio has one.
+    private func reportCloudPlan() async {
+        let sourceURLs = jobs
+            .filter { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
+            .map(\.sourceURL)
+        guard let audioExtractor, let firstSource = sourceURLs.first else { return }
+
+        do {
+            let duration = try await audioExtractor.duration(of: firstSource)
+            let plan = GeminiAudioChunkPlanner.plan(
+                duration: duration,
+                options: geminiTranscriptionOptions
+            )
+            let fileCount = max(sourceURLs.count, 1)
+            statusMessage = sourceURLs.count == 1
+                ? "Cloud plan: \(plan.summaryDescription)"
+                : "Cloud plan for \(fileCount) files, first is \(Self.formatDuration(duration)) · \(plan.summaryDescription)"
+        } catch {
+            // Advisory only. A source whose duration cannot be read is still
+            // handled by the service, which fails with an actionable message.
+            statusMessage = "Starting cloud batch; Tare will measure each file as it runs"
+        }
+    }
+
+    private static func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "\(total)s"
+    }
+
     private func startBatch(
         effectiveModelIdentifier: String,
         geminiCredentials: [GeminiAPIKeyCredential]? = nil
@@ -1060,7 +1076,7 @@ final class TranscriptionStore: ObservableObject {
             outputDirectory: exportDirectory,
             localeIdentifier: localeIdentifier,
             modelIdentifier: effectiveModelIdentifier,
-            formats: selectedFormats.intersection(Self.textSidecarFormats),
+            formats: selectedFormats.intersection(ExportFormat.sidecarFormats),
             attachCaptionedVideoToSource: attachCaptionedVideoToSource,
             chunkSeconds: WhisperModelPreset.isGeminiTranscribe(effectiveModelIdentifier) || WhisperModelPreset.usesLongFormInference(effectiveModelIdentifier)
                 ? 0
@@ -1860,7 +1876,7 @@ final class TranscriptionStore: ObservableObject {
         )
         let baseName = OutputFolderPlanner.sanitizedBaseName(naming.title)
         var outputURLs: [URL] = []
-        let exportFormats = configuration.formats.intersection(Self.textSidecarFormats)
+        let exportFormats = configuration.formats.intersection(ExportFormat.sidecarFormats)
 
         if !exportFormats.isEmpty {
             outputURLs.append(
@@ -2068,9 +2084,7 @@ final class TranscriptionStore: ObservableObject {
         guard !formats.isEmpty else {
             return [.text]
         }
-        let textFormats = formats.intersection(textSidecarFormats)
-        return textFormats.isEmpty ? [.text] : textFormats
+        let sidecars = formats.intersection(ExportFormat.sidecarFormats)
+        return sidecars.isEmpty ? [.text] : sidecars
     }
-
-    private static let textSidecarFormats: Set<ExportFormat> = [.text, .timestampedText]
 }

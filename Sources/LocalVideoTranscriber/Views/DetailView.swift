@@ -274,10 +274,10 @@ private struct ExportOptionsView: View {
     @ObservedObject var store: TranscriptionStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Space.group) {
             HStack {
                 Label("Export", systemImage: "square.and.arrow.down")
-                    .font(.headline)
+                    .font(Typography.sectionHeader)
 
                 Spacer()
 
@@ -313,20 +313,59 @@ private struct ExportOptionsView: View {
 
             RecognitionSettingsView(store: store)
 
-            Toggle("Save Plain Transcript", isOn: Binding(
-                get: { store.savesTextTranscript },
-                set: { store.setTextTranscriptEnabled($0) }
-            ))
-            .toggleStyle(.checkbox)
+            VStack(alignment: .leading, spacing: Space.tight) {
+                Text("Transcript files")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
 
-            Toggle("Save Timestamped Transcript", isOn: Binding(
-                get: { store.savesTimestampedTranscript },
-                set: { store.setTimestampedTranscriptEnabled($0) }
-            ))
-            .toggleStyle(.checkbox)
+                ForEach(ExportFormat.visibleManualFormats) { format in
+                    Toggle(isOn: formatBinding(format)) {
+                        Text(format.displayName)
+                            .font(Typography.rowTitle)
+                    }
+                    .toggleStyle(.checkbox)
+                    .disabled(format.needsWordTimestamps && !modelProvidesWordTimestamps)
+                    .help(formatHelp(format))
+                }
+
+                if !modelProvidesWordTimestamps {
+                    Label(
+                        "\(store.effectiveSelectedModelIdentifier) does not produce word-level timings, so Word Timings and Apple Music TTML are unavailable.",
+                        systemImage: "info.circle"
+                    )
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .padding(Space.group)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(Palette.contentBackground, in: RoundedRectangle(cornerRadius: Radius.card))
+    }
+
+    private var modelProvidesWordTimestamps: Bool {
+        WhisperModelPreset.preset(for: store.effectiveSelectedModelIdentifier)?
+            .supportsWordTimestamps ?? true
+    }
+
+    private func formatBinding(_ format: ExportFormat) -> Binding<Bool> {
+        Binding(
+            get: { store.selectedFormats.contains(format) },
+            set: { isEnabled in
+                if isEnabled {
+                    store.selectedFormats.insert(format)
+                } else {
+                    store.selectedFormats.remove(format)
+                }
+            }
+        )
+    }
+
+    private func formatHelp(_ format: ExportFormat) -> String {
+        if format.needsWordTimestamps && !modelProvidesWordTimestamps {
+            return "The selected model does not produce word-level timings."
+        }
+        return "Writes a .\(format.fileExtension) file beside the transcript."
     }
 }
 

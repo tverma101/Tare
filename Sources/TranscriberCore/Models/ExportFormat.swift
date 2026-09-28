@@ -13,8 +13,21 @@ public enum ExportFormat: String, CaseIterable, Codable, Hashable, Identifiable 
 
     public var id: String { rawValue }
 
+    /// The sidecar files Tare offers as a checkbox.
+    ///
+    /// `captionedVideo` is excluded because it produces or replaces media rather
+    /// than a sidecar file, and is governed by the separate
+    /// "embed subtitles into video sources" setting.
     public static var visibleManualFormats: [ExportFormat] {
-        [.text, .timestampedText]
+        [.text, .timestampedText, .srt, .vtt, .json, .wordTimings, .appleMusicLyrics, .appleMusicTTML]
+    }
+
+    /// Every format written as a file beside the transcript manifest.
+    public static let sidecarFormats: Set<ExportFormat> = Set(visibleManualFormats)
+
+    /// Formats whose output is meaningless without word-level alignment.
+    public var needsWordTimestamps: Bool {
+        requiresWordTimestamps
     }
 
     public var displayName: String {

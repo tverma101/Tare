@@ -73,7 +73,7 @@ enum TranscriberCoreSmokeTests {
         try await testCloudAudioExtractionPreservesSourceQuality()
         try await testGeminiTranscriptionServiceWithMockAPI()
         try testTranscriptionConfigurationRequestsWordTimestampsByDefault()
-        try testExportFormatVisibleOptionsAreTextOnly()
+        try testExportFormatVisibleOptions()
         try testSupportedMediaRecognizesDefaultPlayerFormats()
         try testPreferredMacCompatibleURLsChooseQuickTimeFriendlyVariant()
         print("TranscriberCoreSmokeTests passed")
@@ -1391,10 +1391,26 @@ enum TranscriberCoreSmokeTests {
         try expect(timed.requiresWordTimestamps, "Word timing exports should request word timestamp alignment.")
     }
 
-    private static func testExportFormatVisibleOptionsAreTextOnly() throws {
-        try expect(ExportFormat.visibleManualFormats == [.text, .timestampedText], "Only text transcript options should be visible as manual output choices.")
+    private static func testExportFormatVisibleOptions() throws {
+        let visible = ExportFormat.visibleManualFormats
+        try expect(!visible.isEmpty, "There should be manual output choices.")
+        try expect(
+            !visible.contains(.captionedVideo),
+            "Captioned video replaces media rather than writing a sidecar, so it must not be a manual format choice."
+        )
+        try expect(
+            Set(visible) == ExportFormat.sidecarFormats,
+            "Every visible manual format should be one the store will actually export."
+        )
+        try expect(
+            ExportFormat.allCases.count > visible.count,
+            "captionedVideo is the only format that is not a sidecar choice."
+        )
         try expect(ExportFormat.text.displayName == "Plain Transcript", "Plain text format should use the product-facing label.")
         try expect(ExportFormat.timestampedText.displayName == "Timestamped Transcript", "Timestamped text format should use the product-facing label.")
+        try expect(ExportFormat.srt.needsWordTimestamps == false, "SRT is built from segment timings, not word alignment.")
+        try expect(ExportFormat.wordTimings.needsWordTimestamps, "Word timing exports should be gated on word-level alignment.")
+        try expect(ExportFormat.appleMusicTTML.needsWordTimestamps, "TTML timing should be gated on word-level alignment.")
     }
 
     private static func testSupportedMediaRecognizesDefaultPlayerFormats() throws {
