@@ -9,4 +9,5 @@ Use lowercase kebab-case filenames for new records.
 
 - [canary-qwen-memory](canary-qwen-memory.md)
 - [gemini-cloud-transcription](gemini-cloud-transcription.md)
+- [ux-overhaul-20260927](ux-overhaul-20260927.md)
 <!-- project-memory:docs-index:end -->
