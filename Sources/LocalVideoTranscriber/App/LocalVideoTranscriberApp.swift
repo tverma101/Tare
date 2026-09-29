@@ -7,9 +7,20 @@ struct TareApp: App {
     @StateObject private var store = TranscriptionStore()
 
     var body: some Scene {
-        WindowGroup("Tare") {
+        // A single Window rather than a WindowGroup. The app declares audio and
+        // video document types, and a WindowGroup opened one new empty window per
+        // file sent to it — opening 40 files from Finder produced 40 windows.
+        Window("Tare", id: "main") {
             ContentView(store: store)
                 .frame(minWidth: 980, minHeight: 620)
+                // SwiftUI owns the open-files event, so the AppDelegate's
+                // application(_:open:) is never delivered and files sent to the
+                // app — Finder's Open With, a Dock drop, or
+                // `open -a Tare <files>` — used to arrive nowhere. This is the
+                // path that actually receives them.
+                .onOpenURL { url in
+                    store.addFiles([url])
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -29,7 +40,6 @@ struct TareApp: App {
                 .disabled(!store.canStart && !store.isRunning && !store.isPreparingModel)
             }
         }
-
         Settings {
             SettingsView(store: store)
                 .frame(minWidth: 420, idealWidth: 520, minHeight: 480, idealHeight: 640)
