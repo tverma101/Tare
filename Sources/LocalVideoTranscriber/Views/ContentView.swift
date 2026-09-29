@@ -7,15 +7,16 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            NavigationSplitView {
-                QueueTableView(store: store)
-                    .navigationSplitViewColumnWidth(
-                        min: Metric.sidebarMin,
-                        ideal: Metric.sidebarIdeal,
-                        max: Metric.sidebarMax
+            HSplitView {
+                QueueSidebarView(store: store)
+                    .frame(
+                        minWidth: Metric.sidebarMin,
+                        idealWidth: Metric.sidebarIdeal,
+                        maxWidth: Metric.sidebarMax
                     )
-            } detail: {
-                DetailView(store: store)
+
+                QueueWorkspaceView(store: store)
+                    .frame(minWidth: Metric.detailMin)
             }
             .toolbar {
                 ToolbarItemGroup {
@@ -80,5 +81,24 @@ struct ContentView: View {
             Text(store.cloudErrorMessage ?? "Tare could not update the Gemini configuration.")
         }
         .statusAnnouncements(store)
+        .confirmationDialog(
+            "Rename and move files?",
+            isPresented: $store.isConfirmingOrganize
+        ) {
+            Button(
+                "Rename and Move \(store.mkvSourceURLs.count) File\(store.mkvSourceURLs.count == 1 ? "" : "s")",
+                role: .destructive
+            ) {
+                Task { await store.confirmOrganize() }
+            }
+            Button("Cancel", role: .cancel) {
+                store.isConfirmingOrganize = false
+            }
+        } message: {
+            let names = store.mkvSourceURLs.prefix(8).map(\.lastPathComponent)
+            let overflow = store.mkvSourceURLs.count - names.count
+            let list = names.joined(separator: "\n") + (overflow > 0 ? "\n…and \(overflow) more" : "")
+            return Text("Tare will rename and move these files into \(store.libraryDirectory.lastPathComponent):\n\n\(list)\n\nThis changes files on disk.")
+        }
     }
 }

@@ -13,20 +13,6 @@ struct QueueTableView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Filter", selection: $store.queueFilter) {
-                ForEach(TranscriptionStore.QueueFilter.allCases) { filter in
-                    Text("\(filter.displayName) \(store.count(for: filter))")
-                        .tag(filter)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .padding(.horizontal, Space.close)
-            .padding(.vertical, Space.tight)
-            .accessibilityLabel("Filter the job queue")
-
             Table(store.visibleJobs, selection: $store.selectedJobID) {
             TableColumn("") { job in
                 StateCell(job: job)
@@ -83,7 +69,6 @@ struct QueueTableView: View {
         }
         .tableStyle(.inset)
         .accessibilityLabel("Job queue")
-        }
         .contextMenu(forSelectionType: TranscriptionJob.ID.self) { ids in
             if let id = ids.first, let job = store.jobs.first(where: { $0.id == id }) {
                 Button("Reveal Source in Finder") {

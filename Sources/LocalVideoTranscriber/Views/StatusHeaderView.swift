@@ -52,6 +52,12 @@ struct StatusStripView: View {
         VStack(spacing: 0) {
             HStack(spacing: Space.close) {
                 if isRunning {
+                    // Fixed-width counter so the bar is the only thing that moves.
+                    Text(store.batchCounterText ?? "")
+                        .font(Typography.monoDigit)
+                        .foregroundStyle(Palette.textSecondary)
+                        .frame(width: Metric.batchCounterWidth, alignment: .leading)
+
                     ProgressView()
                         .progressViewStyle(.linear)
                         .controlSize(.small)
@@ -62,20 +68,21 @@ struct StatusStripView: View {
                             value: store.batchProgress
                         )
                 } else {
-                    Text(presentation.title)
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textTertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Idle has no progress to show, and restating the header's
+                    // state would waste the row.
+                    Color.clear.frame(height: Metric.progressBarHeight)
+                        .accessibilityHidden(true)
                 }
 
                 Text(store.statusMessage)
                     .font(Typography.monoInline)
-                    .foregroundStyle(Palette.textSecondary)
+                    .foregroundStyle(isRunning ? Palette.textSecondary : Palette.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .layoutPriority(0)
+                    .layoutPriority(1)
             }
             .padding(.horizontal, Space.page)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: Metric.statusStripHeight)
         .background(Palette.contentBackground)
@@ -101,7 +108,7 @@ private struct BatchMenu: View {
                 .disabled(!store.canScanForMKVs)
 
                 Button("Clean Names & Organize") {
-                    Task { await store.cleanAndOrganizeMKVs() }
+                    store.requestOrganizeConfirmation()
                 }
                 .disabled(!store.canCleanAndOrganizeMKVs)
 

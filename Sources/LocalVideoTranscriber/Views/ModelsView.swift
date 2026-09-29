@@ -130,8 +130,10 @@ struct ModelsView: View {
             }
             .disabled(store.modelOperation != nil || store.isRefreshingModels)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, Space.page)
+        .padding(.vertical, Space.group)
+        .frame(maxWidth: Metric.contentMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var emptyLocalModels: some View {

@@ -40,7 +40,12 @@ struct TareApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+
+        // Deliberately no NSApp.activate() here. macOS already brings a regular
+        // app forward when the user clicks its window or its Dock icon. Calling
+        // activate on launch yanked focus away from whatever the user was doing
+        // — for example when a Finder Quick Action or a script started Tare, or
+        // during an automated build-and-capture run.
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

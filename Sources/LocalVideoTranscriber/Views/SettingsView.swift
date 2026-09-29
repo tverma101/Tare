@@ -8,7 +8,6 @@ struct SettingsView: View {
 
     private enum LibraryAction: String, Identifiable {
         case scan
-        case organize
 
         var id: String { rawValue }
     }
@@ -124,7 +123,7 @@ struct SettingsView: View {
                     .disabled(!store.canScanForMKVs)
 
                     Button("Clean Names & Organize") {
-                        pendingLibraryAction = .organize
+                        store.requestOrganizeConfirmation()
                     }
                     .disabled(!store.canCleanAndOrganizeMKVs)
 
@@ -189,23 +188,10 @@ struct SettingsView: View {
                     pendingLibraryAction = nil
                     Task { await store.scanForMKVs() }
                 }
-            case .organize:
-                Button("Rename and Move \(store.mkvSourceURLs.count) File\(store.mkvSourceURLs.count == 1 ? "" : "s")", role: .destructive) {
-                    pendingLibraryAction = nil
-                    Task { await store.cleanAndOrganizeMKVs() }
-                }
             }
             Button("Cancel", role: .cancel) { pendingLibraryAction = nil }
-        } message: { action in
-            switch action {
-            case .scan:
-                return Text("Tare looks for MKV files in your \(store.scanRoots.count) search folder\(store.scanRoots.count == 1 ? "" : "s") and adds what it finds to the queue. Nothing is renamed or moved.")
-            case .organize:
-                let names = store.mkvSourceURLs.prefix(8).map(\.lastPathComponent)
-                let overflow = store.mkvSourceURLs.count - names.count
-                let list = names.joined(separator: "\n") + (overflow > 0 ? "\n…and \(overflow) more" : "")
-                return Text("Tare will rename and move these files into \(store.libraryDirectory.lastPathComponent):\n\n\(list)\n\nThis changes files on disk.")
-            }
+        } message: { _ in
+            Text("Tare looks for MKV files in your \(store.scanRoots.count) search folder\(store.scanRoots.count == 1 ? "" : "s") and adds what it finds to the queue. Nothing is renamed or moved.")
         }
     }
 }

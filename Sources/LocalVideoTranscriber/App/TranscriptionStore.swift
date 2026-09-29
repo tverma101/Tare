@@ -177,7 +177,6 @@ final class TranscriptionStore: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var modelPreparationTask: Task<Void, Never>?
     private var batchOutcome: BatchOutcome?
-    private var batchTotalCount = 0
     private var batchJobIDs: Set<TranscriptionJob.ID> = []
     private var shouldAutoStart = false
     private var shouldSelectFirstLocalModel = false
@@ -515,10 +514,22 @@ final class TranscriptionStore: ObservableObject {
     }
 
     /// Whole-batch progress, so the status strip has something honest to show.
+    /// Whole-batch progress, so the status strip has something honest to show.
     var batchProgress: Double {
         guard batchTotalCount > 0 else { return 0 }
-        let finished = jobs.filter { batchJobIDs.contains($0.id) && $0.status.isTerminal }.count
-        return min(1, Double(finished) / Double(batchTotalCount))
+        return min(1, Double(batchCompletedCount) / Double(batchTotalCount))
+    }
+
+    /// "3 of 12" for the running batch, empty when nothing is running.
+    var batchCounterText: String? {
+        guard batchTotalCount > 0 else { return nil }
+        return "\(batchCompletedCount) of \(batchTotalCount)"
+    }
+
+    private var batchTotalCount: Int { batchJobIDs.count }
+
+    private var batchCompletedCount: Int {
+        jobs.filter { batchJobIDs.contains($0.id) && $0.status.isTerminal }.count
     }
 
     func presentFilePicker() {
@@ -746,6 +757,19 @@ final class TranscriptionStore: ObservableObject {
         if autoProcess, addedCount > 0 {
             await cleanOrganizeAndStartMKVs()
         }
+    }
+
+    /// Set by any caller that wants to organize; the confirmation dialog is
+    /// presented once at the top level so no entry point can skip it.
+    @Published var isConfirmingOrganize = false
+
+    func requestOrganizeConfirmation() {
+        isConfirmingOrganize = true
+    }
+
+    func confirmOrganize() async {
+        isConfirmingOrganize = false
+        await cleanAndOrganizeMKVs()
     }
 
     func cleanAndOrganizeMKVs() async {
@@ -1688,7 +1712,6 @@ final class TranscriptionStore: ObservableObject {
         let jobIDs = jobs
             .filter { $0.status == .queued || $0.status == .failed || $0.status == .cancelled }
             .map(\.id)
-        batchTotalCount = jobIDs.count
         batchJobIDs = Set(jobIDs)
         batchOutcome = .running
 

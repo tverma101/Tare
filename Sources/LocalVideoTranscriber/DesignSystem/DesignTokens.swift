@@ -48,7 +48,7 @@ enum Metric {
     static let detailIdeal: CGFloat = 760
 
     // Page chrome
-    static let contentMaxWidth: CGFloat = 720
+    static let contentMaxWidth: CGFloat = 860
     static let headerHeight: CGFloat = 44
     static let statusStripHeight: CGFloat = 28
 
@@ -57,6 +57,7 @@ enum Metric {
     static let stateIconSize: CGFloat = 13
     static let percentTextWidth: CGFloat = 30
     static let chunkTextWidth: CGFloat = 56
+    static let batchCounterWidth: CGFloat = 56
 
     // Table columns
     static let stateColumnWidth: CGFloat = 22
@@ -71,6 +72,11 @@ enum Metric {
     static let outputsColumnWidth: CGFloat = 76
     static let noteColumnMin: CGFloat = 120
     static let noteColumnIdeal: CGFloat = 240
+
+    // Queue workspace: the table keeps a usable floor, the job detail below it
+    // keeps enough room to read.
+    static let tableMinHeight: CGFloat = 170
+    static let jobDetailMinHeight: CGFloat = 200
 }
 
 // MARK: - Palette

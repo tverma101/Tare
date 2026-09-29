@@ -1,25 +1,7 @@
 import SwiftUI
 import TranscriberCore
 
-struct DetailView: View {
-    @ObservedObject var store: TranscriptionStore
-
-    var body: some View {
-        VStack(spacing: 0) {
-            StatusHeaderView(store: store)
-
-            StatusStripView(store: store)
-
-            if let job = store.selectedJob {
-                JobDetailView(store: store, job: job)
-            } else {
-                EmptyQueueView(store: store)
-            }
-        }
-    }
-}
-
-private struct EmptyQueueView: View {
+struct EmptyQueueView: View {
     @ObservedObject var store: TranscriptionStore
 
     var body: some View {
@@ -59,7 +41,7 @@ private struct EmptyQueueView: View {
     }
 }
 
-private struct JobDetailView: View {
+struct JobDetailView: View {
     @ObservedObject var store: TranscriptionStore
     let job: TranscriptionJob
 

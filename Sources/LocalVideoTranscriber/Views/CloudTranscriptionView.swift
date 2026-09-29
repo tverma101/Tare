@@ -50,6 +50,8 @@ struct CloudTranscriptionView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
+        .frame(maxWidth: Metric.contentMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelCard: some View {

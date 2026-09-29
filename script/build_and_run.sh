@@ -35,10 +35,10 @@ case "$MODE" in
   --dmg|dmg|--install|install|--all|all)
     exec "$ROOT_DIR/script/package_release.sh" "$MODE"
     ;;
-  run|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify)
+  run|--stage-only|stage-only|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify)
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--dmg|--install|--all]" >&2
+    echo "usage: $0 [run|--stage-only|--debug|--logs|--telemetry|--verify|--dmg|--install|--all]" >&2
     exit 2
     ;;
 esac
@@ -93,12 +93,22 @@ PLIST
 /usr/bin/codesign --force --deep --sign "$SIGNING_IDENTITY" --timestamp=none "$RUN_BUNDLE"
 
 open_app() {
-  /usr/bin/open -n "$RUN_BUNDLE"
+  if [[ -n "${TARE_NO_ACTIVATE:-}" ]]; then
+    # -g launches without bringing the app forward.
+    /usr/bin/open -g -a "$RUN_BUNDLE"
+  else
+    /usr/bin/open -n "$RUN_BUNDLE"
+  fi
 }
 
 case "$MODE" in
   run)
     open_app
+    ;;
+  --stage-only|stage-only)
+    # Build and sign the bundle without launching it. Used for automated checks
+    # that need a bundle on disk but must not disturb what the user is doing.
+    echo "Staged $RUN_BUNDLE without launching."
     ;;
   --debug|debug)
     lldb -- "$RUN_BINARY"
