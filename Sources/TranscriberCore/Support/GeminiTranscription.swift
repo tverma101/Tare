@@ -105,7 +105,10 @@ public enum GeminiTranscriptionLimits {
     public static let audioTokensPerSecond = 25
     public static let documentedPlainChunkSeconds = 60 * 60
     public static let documentedAnnotatedChunkSeconds = 30 * 60
-    public static let safePlainChunkSeconds = 55 * 60
+    // Google documents one hour, but on 2026-10-04 a ~34-minute plain request
+    // came back 2xx with no transcript (a ~30.5-minute one succeeded), so plain
+    // requests are held to the same 28 minutes as annotated ones.
+    public static let safePlainChunkSeconds = 28 * 60
     public static let safeAnnotatedChunkSeconds = 28 * 60
     public static let maximumVocabularyTerms = 1_000
     public static let maximumFileBytes: Int64 = 2 * 1024 * 1024 * 1024

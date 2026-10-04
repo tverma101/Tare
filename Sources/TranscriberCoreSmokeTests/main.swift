@@ -69,9 +69,14 @@ enum TranscriberCoreSmokeTests {
         try testGeminiModelDetectionAndOptions()
         try testGeminiAPIKeyStorePersistence()
         try testGeminiChunkPlanner()
+        try testGeminiChunkPlannerRegressions()
         try await testGeminiModelAccessVerification()
         try await testCloudAudioExtractionPreservesSourceQuality()
         try await testGeminiTranscriptionServiceWithMockAPI()
+        try await testGeminiMultiChunkRecordingWithMockAPI()
+        try await testGeminiEmptyReplySplitsAndRetriesWithMockAPI()
+        try await testGeminiUnusableRepliesWithMockAPI()
+        try await testGeminiDiagnosticLogWithMockAPI()
         try testTranscriptionConfigurationRequestsWordTimestampsByDefault()
         try testExportFormatVisibleOptions()
         try testChunkProgressLineParsing()
@@ -971,7 +976,7 @@ enum TranscriberCoreSmokeTests {
 
         let documentedDefault = GeminiTranscriptionOptions()
         try expect(documentedDefault.mode == .verbatim, "Gemini options should follow Google's documented verbatim default.")
-        try expect(documentedDefault.safeChunkSeconds == GeminiTranscriptionLimits.safePlainChunkSeconds, "Unannotated requests should use the 55-minute safety limit.")
+        try expect(documentedDefault.safeChunkSeconds == GeminiTranscriptionLimits.safePlainChunkSeconds, "Unannotated requests should use the 28-minute safety limit.")
         let validatedDefault = try documentedDefault.validated()
         try expect(validatedDefault == documentedDefault, "Default Gemini options should validate.")
         try expect(GeminiTranscriptionService.bcp47LanguageCode(from: "auto") == nil, "Auto detection should omit a language hint value.")
@@ -1051,7 +1056,7 @@ enum TranscriberCoreSmokeTests {
         )
 
         try expect(lecturePlan.isChunked, "A 71-minute lecture should be automatically chunked for Gemini.")
-        try expect(lecturePlan.chunks.count == 2, "A 71:52 plain lecture should use two safe chunks.")
+        try expect(lecturePlan.chunks.count == 3, "A 71:52 plain lecture should use three safe chunks of at most 28 minutes.")
         try expect(lecturePlan.chunks.first?.startTime == 0, "Gemini chunk planning should start at the beginning of the recording.")
         try expect(abs((lecturePlan.chunks.last?.endTime ?? 0) - Double(lectureDuration)) < 0.001, "Gemini chunk planning should cover the complete recording.")
         try expect(lecturePlan.chunks.allSatisfy { $0.duration <= Double(plain.safeChunkSeconds) + 0.001 }, "Plain Gemini chunks must stay below the safe request size.")
@@ -1080,10 +1085,10 @@ enum TranscriberCoreSmokeTests {
         let plainTwoHalf = GeminiAudioChunkPlanner.plan(
             duration: lectureTwoAndHalfHours,
             options: plain,
-            safeBoundaries: [3_000, 6_000, 8_900]
+            safeBoundaries: [1_500, 3_100, 4_700, 6_300, 7_800]
         )
-        try expect(plainTwoHalf.chunks.count == 3, "A 2h30m plain lecture should use three safe chunks.")
-        try expect(plainTwoHalf.chunks.allSatisfy { $0.duration <= Double(plain.safeChunkSeconds) + 0.001 }, "2h30m plain chunks must stay under the 55-minute safe limit.")
+        try expect(plainTwoHalf.chunks.count == 6, "A 2h30m plain lecture should use six safe chunks.")
+        try expect(plainTwoHalf.chunks.allSatisfy { $0.duration <= Double(plain.safeChunkSeconds) + 0.001 }, "2h30m plain chunks must stay under the 28-minute safe limit.")
         try expect(plainTwoHalf.chunks.first?.startTime == 0, "2h30m plain planning should start at zero.")
         try expect(abs((plainTwoHalf.chunks.last?.endTime ?? 0) - lectureTwoAndHalfHours) < 0.001, "2h30m plain planning should cover the full recording.")
         for index in 1..<plainTwoHalf.chunks.count {
@@ -1093,11 +1098,11 @@ enum TranscriberCoreSmokeTests {
             )
         }
         try expect(
-            abs(plainTwoHalf.chunks[0].endTime - (3_000 + GeminiTranscriptionLimits.boundaryContextOverlapSeconds)) < 0.001,
+            abs(plainTwoHalf.chunks[0].endTime - (1_500 + GeminiTranscriptionLimits.boundaryContextOverlapSeconds)) < 0.001,
             "2h30m plain planning should cut near the first silence boundary with overlap context."
         )
         try expect(
-            abs(plainTwoHalf.chunks[1].startTime - (3_000 - GeminiTranscriptionLimits.boundaryContextOverlapSeconds)) < 0.001,
+            abs(plainTwoHalf.chunks[1].startTime - (1_500 - GeminiTranscriptionLimits.boundaryContextOverlapSeconds)) < 0.001,
             "2h30m plain second chunk should begin with overlap before the first silence boundary."
         )
         try expect(
@@ -1159,7 +1164,8 @@ enum TranscriberCoreSmokeTests {
         let session = URLSession(configuration: sessionConfiguration)
         let service = GeminiTranscriptionService(
             session: session,
-            baseURL: URL(string: "https://gemini.test")!
+            baseURL: URL(string: "https://gemini.test")!,
+            diagnosticsDirectory: temporaryDirectory.appendingPathComponent("logs")
         )
         let transcript = try await service.transcribe(
             audioURL: audioURL,
@@ -1248,6 +1254,436 @@ enum TranscriberCoreSmokeTests {
         try expect(failoverTranscript.fullText == "Hello world", "Gemini should fail over to the next enabled API key after authentication failure.")
         try expect(GeminiMockURLProtocol.recordedAPIKeys.contains("bad-key-123456"), "Gemini failover should try the first configured key.")
         try expect(GeminiMockURLProtocol.recordedAPIKeys.contains("good-key-123456"), "Gemini failover should try the next configured key.")
+    }
+
+    // MARK: Gemini chunking and failure-path regressions
+
+    /// A 67.6-minute recording failed on a cloud run with an empty reply. The
+    /// planner tests above never used that length, so this pins the real
+    /// durations and then sweeps the whole input range for invariants.
+    private static func testGeminiChunkPlannerRegressions() throws {
+        let plain = GeminiTranscriptionOptions()
+        let annotated = GeminiTranscriptionOptions(mode: .verbatim, wordTimestamps: true)
+
+        for observed in [4_053.738667, 3_684.16] {
+            for options in [plain, annotated] {
+                let plan = GeminiAudioChunkPlanner.plan(duration: observed, options: options)
+                try expect(plan.isChunked, "A \(observed)s recording must be chunked.")
+                try expectPlanIsSound(plan, duration: observed, options: options, context: "observed \(observed)s")
+            }
+            let plainPlan = GeminiAudioChunkPlanner.plan(duration: observed, options: plain)
+            try expect(plainPlan.chunks.count == 3, "A \(observed)s plain recording should need exactly three 28-minute-safe chunks, got \(plainPlan.chunks.count).")
+        }
+
+        let boundaryTimes: [TimeInterval] = [
+            1, 30, 59.9, 60,
+            1_679.9, 1_680, 1_680.01, 1_800, 3_299.9, 3_300, 3_300.01, 3_301, 3_360,
+            3_599, 3_600, 3_660, 4_053.738667, 5_000, 6_599, 6_600, 6_601,
+            7_200, 9_000, 10_800, 21_600
+        ]
+        let silenceSets: [[TimeInterval]] = [
+            [],
+            [600, 1_200, 1_800, 2_400, 3_000, 3_600],
+            [1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000],
+            [0.2, 0.4, 3_299.5, 3_300.5],
+            [1, 2, 3]
+        ]
+        for duration in boundaryTimes {
+            for options in [plain, annotated] {
+                for silences in silenceSets {
+                    let plan = GeminiAudioChunkPlanner.plan(duration: duration, options: options, safeBoundaries: silences)
+                    try expectPlanIsSound(
+                        plan,
+                        duration: duration,
+                        options: options,
+                        context: "\(duration)s, \(options.safeChunkSeconds)s limit, \(silences.count) silences"
+                    )
+                }
+            }
+        }
+
+        // A fine sweep so a rounding edge between the table values cannot hide.
+        var duration: TimeInterval = 1
+        while duration < 14_400 {
+            for options in [plain, annotated] {
+                let plan = GeminiAudioChunkPlanner.plan(duration: duration, options: options)
+                try expectPlanIsSound(plan, duration: duration, options: options, context: "sweep \(duration)s")
+            }
+            duration += 37.3
+        }
+    }
+
+    private static func expectPlanIsSound(
+        _ plan: GeminiTranscriptionPlan,
+        duration: TimeInterval,
+        options: GeminiTranscriptionOptions,
+        context: String
+    ) throws {
+        let limit = Double(options.safeChunkSeconds)
+        guard let first = plan.chunks.first, let last = plan.chunks.last else {
+            throw SmokeTestFailure.failed("Plan for \(context) has no chunks.")
+        }
+        try expect(first.startTime == 0, "Plan for \(context) must start at 0, started at \(first.startTime).")
+        try expect(abs(last.endTime - duration) < 0.001, "Plan for \(context) must end at the recording end, ended at \(last.endTime).")
+        try expect(plan.chunks.map(\.index) == Array(1...plan.chunks.count), "Plan for \(context) must number chunks 1...n.")
+        try expect(
+            plan.chunks.allSatisfy { $0.duration <= limit + 0.001 },
+            "Plan for \(context) has a chunk above the \(limit)s safe limit: \(plan.chunks.map(\.duration))."
+        )
+        try expect(
+            plan.chunks.allSatisfy { $0.duration > 0 },
+            "Plan for \(context) has an empty chunk."
+        )
+        if duration > limit {
+            try expect(plan.chunks.count >= 2, "Plan for \(context) is over the limit but was not split.")
+        }
+        for index in 1..<max(1, plan.chunks.count) {
+            let previous = plan.chunks[index - 1]
+            let current = plan.chunks[index]
+            try expect(current.startTime >= previous.startTime, "Plan for \(context): chunk \(index + 1) starts before chunk \(index).")
+            try expect(current.startTime < previous.endTime, "Plan for \(context): chunks \(index) and \(index + 1) leave a gap or touch without overlap.")
+            try expect(current.endTime > previous.endTime, "Plan for \(context): chunk \(index + 1) adds no new audio.")
+        }
+        // A sliver chunk costs a whole upload and request for a second of audio.
+        if plan.chunks.count > 1 {
+            try expect(
+                plan.chunks.allSatisfy { $0.duration >= min(duration, 30) },
+                "Plan for \(context) contains a tiny chunk: \(plan.chunks.map(\.duration))."
+            )
+        }
+    }
+
+    private static func makeSineAudio(
+        named name: String,
+        seconds: Int,
+        sampleRate: Int,
+        in directory: URL
+    ) async throws -> URL {
+        let audioURL = directory.appendingPathComponent(name)
+        _ = try await ProcessRunner().run(
+            executableURL: FFmpegAudioExtractor.resolveExecutable(named: "ffmpeg")!,
+            arguments: [
+                "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=\(seconds)",
+                "-ac", "1", "-ar", "\(sampleRate)", "-c:a", "pcm_s16le",
+                audioURL.path
+            ]
+        )
+        return audioURL
+    }
+
+    private static func makeMockGeminiService(diagnosticsDirectory: URL? = nil) -> GeminiTranscriptionService {
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [GeminiMockURLProtocol.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        let baseURL = URL(string: "https://gemini.test")!
+        if let diagnosticsDirectory {
+            return GeminiTranscriptionService(session: session, baseURL: baseURL, diagnosticsDirectory: diagnosticsDirectory)
+        }
+        return GeminiTranscriptionService(
+            session: session,
+            baseURL: baseURL,
+            diagnosticsDirectory: FileManager.default.temporaryDirectory.appendingPathComponent("tare-smoke-logs-\(UUID().uuidString)")
+        )
+    }
+
+    private static var hasFFmpegTools: Bool {
+        FFmpegAudioExtractor.resolveExecutable(named: "ffmpeg") != nil
+            && FFmpegAudioExtractor.resolveExecutable(named: "ffprobe") != nil
+    }
+
+    private static func geminiChunkTempFiles() -> Set<String> {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Tare", isDirectory: true)
+            .appendingPathComponent("GeminiChunks", isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return Set(names)
+    }
+
+    /// A real file just over the plain limit, end to end through
+    /// ffprobe, ffmpeg chunk extraction, upload, and the mock interactions
+    /// endpoint. This is the shape of the recording that failed in production.
+    private static func testGeminiMultiChunkRecordingWithMockAPI() async throws {
+        guard hasFFmpegTools else {
+            print("Skipping Gemini multi-chunk test because ffmpeg or ffprobe is missing")
+            return
+        }
+
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let options = GeminiTranscriptionOptions()
+        let seconds = options.safeChunkSeconds + 100
+        let audioURL = try await makeSineAudio(named: "Long Lecture.wav", seconds: seconds, sampleRate: 8_000, in: temporaryDirectory)
+
+        GeminiMockURLProtocol.reset()
+        defer { GeminiMockURLProtocol.reset() }
+        let service = makeMockGeminiService(diagnosticsDirectory: temporaryDirectory.appendingPathComponent("logs"))
+        let tempFilesBefore = geminiChunkTempFiles()
+        let progressLog = ProgressLog()
+
+        let transcript = try await service.transcribe(
+            audioURL: audioURL,
+            sourceName: audioURL.lastPathComponent,
+            localeIdentifier: "auto",
+            credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: "test-key-123456")],
+            options: options,
+            audioExtractor: try FFmpegAudioExtractor(),
+            progress: { progressLog.record($0) }
+        )
+
+        try expect(!transcript.fullText.isEmpty, "A chunked Gemini recording must produce a transcript.")
+        try expect(GeminiMockURLProtocol.interactionRequestCount == 2, "A \(seconds)s plain recording should send exactly two interactions, sent \(GeminiMockURLProtocol.interactionRequestCount).")
+        try expect(GeminiMockURLProtocol.uploadCount == 2, "A two-chunk recording should upload exactly two chunks, uploaded \(GeminiMockURLProtocol.uploadCount).")
+        let totals = Set(progressLog.snapshot().map(\.totalChunks))
+        try expect(totals.contains(2), "Progress should report two chunks, reported \(totals).")
+        let finished = progressLog.snapshot().map(\.completedChunks).max() ?? 0
+        try expect(finished == 2, "Progress should reach 2 of 2 chunks, reached \(finished).")
+        try expect(
+            geminiChunkTempFiles().subtracting(tempFilesBefore).isEmpty,
+            "Chunk files must be removed after a successful chunked run."
+        )
+
+        // A failure on the second chunk must also clean up and surface the error.
+        GeminiMockURLProtocol.reset()
+        GeminiMockURLProtocol.interactionMode = .emptyOutputText
+        let tempFilesBeforeFailure = geminiChunkTempFiles()
+        do {
+            _ = try await service.transcribe(
+                audioURL: audioURL,
+                sourceName: audioURL.lastPathComponent,
+                localeIdentifier: "auto",
+                credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: "test-key-123456")],
+                options: options,
+                audioExtractor: try FFmpegAudioExtractor()
+            )
+            throw SmokeTestFailure.failed("An empty reply on a chunked recording must fail, not return a partial transcript.")
+        } catch let error as GeminiTranscriptionError {
+            try expect(error == .emptyResponse, "An empty chunk reply should surface as emptyResponse, got \(error).")
+        }
+        try expect(
+            geminiChunkTempFiles().subtracting(tempFilesBeforeFailure).isEmpty,
+            "Chunk files must be removed after a failed chunked run."
+        )
+    }
+
+    /// Google answered 2xx with no transcript for a ~34-minute plain span. The
+    /// service must split that span and retry instead of failing the lecture.
+    private static func testGeminiEmptyReplySplitsAndRetriesWithMockAPI() async throws {
+        guard hasFFmpegTools else {
+            print("Skipping Gemini split-and-retry test because ffmpeg or ffprobe is missing")
+            return
+        }
+
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let options = GeminiTranscriptionOptions()
+        let audioURL = try await makeSineAudio(
+            named: "Split.wav",
+            seconds: options.safeChunkSeconds + 100,
+            sampleRate: 8_000,
+            in: temporaryDirectory
+        )
+
+        GeminiMockURLProtocol.reset()
+        defer { GeminiMockURLProtocol.reset() }
+        GeminiMockURLProtocol.emptyReplyCount = 1
+        let service = makeMockGeminiService(diagnosticsDirectory: temporaryDirectory.appendingPathComponent("logs"))
+        let progressLog = ProgressLog()
+        let tempFilesBefore = geminiChunkTempFiles()
+
+        let transcript = try await service.transcribe(
+            audioURL: audioURL,
+            sourceName: audioURL.lastPathComponent,
+            localeIdentifier: "auto",
+            credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: "test-key-123456")],
+            options: options,
+            audioExtractor: try FFmpegAudioExtractor(),
+            progress: { progressLog.record($0) }
+        )
+
+        try expect(!transcript.fullText.isEmpty, "A span that came back empty must be retried in halves and produce a transcript.")
+        try expect(
+            GeminiMockURLProtocol.interactionRequestCount == 4,
+            "Two chunks with one empty reply should take 1 failed + 2 half + 1 second-chunk requests, took \(GeminiMockURLProtocol.interactionRequestCount)."
+        )
+        try expect(
+            progressLog.snapshot().contains { $0.phase.contains("Splitting") },
+            "The split should be visible in progress so the user knows why it is slower."
+        )
+        try expect(
+            geminiChunkTempFiles().subtracting(tempFilesBefore).isEmpty,
+            "Chunk files must be removed after a split-and-retry run."
+        )
+
+        // A reply that stays empty must still end in a clear failure, not a loop.
+        GeminiMockURLProtocol.reset()
+        GeminiMockURLProtocol.emptyReplyCount = 1_000
+        do {
+            _ = try await service.transcribe(
+                audioURL: audioURL,
+                sourceName: audioURL.lastPathComponent,
+                localeIdentifier: "auto",
+                credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: "test-key-123456")],
+                options: options,
+                audioExtractor: try FFmpegAudioExtractor()
+            )
+            throw SmokeTestFailure.failed("A recording that always returns empty replies must fail.")
+        } catch let error as GeminiTranscriptionError {
+            try expect(error == .emptyResponse, "Persistent empty replies should surface as emptyResponse, got \(error).")
+        }
+        try expect(
+            GeminiMockURLProtocol.interactionRequestCount <= 12,
+            "Splitting must stop after a bounded number of requests, made \(GeminiMockURLProtocol.interactionRequestCount)."
+        )
+    }
+
+    /// Every reply shape Tare must accept, and every one it must refuse with a
+    /// specific error instead of an empty transcript.
+    private static func testGeminiUnusableRepliesWithMockAPI() async throws {
+        guard hasFFmpegTools else {
+            print("Skipping Gemini reply-shape test because ffmpeg or ffprobe is missing")
+            return
+        }
+
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let audioURL = try await makeSineAudio(named: "Short.wav", seconds: 1, sampleRate: 16_000, in: temporaryDirectory)
+
+        GeminiMockURLProtocol.reset()
+        defer { GeminiMockURLProtocol.reset() }
+        let service = makeMockGeminiService(diagnosticsDirectory: temporaryDirectory.appendingPathComponent("logs"))
+
+        func run() async throws -> Transcript {
+            try await service.transcribe(
+                audioURL: audioURL,
+                sourceName: audioURL.lastPathComponent,
+                localeIdentifier: "auto",
+                credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: "test-key-123456")],
+                options: GeminiTranscriptionOptions(),
+                audioExtractor: try FFmpegAudioExtractor()
+            )
+        }
+
+        for mode in [GeminiMockURLProtocol.InteractionMode.outputTextOnly, .stepsOnly, .standard] {
+            GeminiMockURLProtocol.reset()
+            GeminiMockURLProtocol.interactionMode = mode
+            GeminiMockURLProtocol.includeWordAnnotations = false
+            let transcript = try await run()
+            try expect(transcript.fullText == "Hello world", "Reply shape \(mode) should parse to the transcript text.")
+        }
+
+        let refused: [(GeminiMockURLProtocol.InteractionMode, GeminiTranscriptionError)] = [
+            (.emptyOutputText, .emptyResponse),
+            (.noTextNodes, .emptyResponse),
+            (.notAnObject, .emptyResponse),
+            (.emptyBody, .emptyResponse),
+            (.inProgress, .incompleteResponse)
+        ]
+        for (mode, expected) in refused {
+            GeminiMockURLProtocol.reset()
+            GeminiMockURLProtocol.interactionMode = mode
+            do {
+                _ = try await run()
+                throw SmokeTestFailure.failed("Reply shape \(mode) must not produce a transcript.")
+            } catch let error as GeminiTranscriptionError {
+                try expect(error == expected, "Reply shape \(mode) should fail with \(expected), got \(error).")
+            }
+        }
+
+        GeminiMockURLProtocol.reset()
+        GeminiMockURLProtocol.interactionMode = .failed
+        do {
+            _ = try await run()
+            throw SmokeTestFailure.failed("A failed provider status must not produce a transcript.")
+        } catch let error as GeminiTranscriptionError {
+            guard case .providerFailure = error else {
+                throw SmokeTestFailure.failed("A failed provider status should be a providerFailure, got \(error).")
+            }
+        }
+
+        // The failure text must point at the log that the next test checks exists.
+        try expect(
+            (GeminiTranscriptionError.emptyResponse.errorDescription ?? "").contains("~/Library/Logs/Tare"),
+            "The empty-reply message should say where the raw reply was saved."
+        )
+        try expect(
+            (GeminiTranscriptionError.incompleteResponse.errorDescription ?? "").contains("~/Library/Logs/Tare"),
+            "The incomplete-reply message should say where the raw reply was saved."
+        )
+    }
+
+    /// An unparseable reply must leave exactly one readable log with the status
+    /// and body, never the API key, and a good run must leave nothing behind.
+    private static func testGeminiDiagnosticLogWithMockAPI() async throws {
+        guard hasFFmpegTools else {
+            print("Skipping Gemini diagnostic log test because ffmpeg or ffprobe is missing")
+            return
+        }
+
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let audioURL = try await makeSineAudio(named: "Short.wav", seconds: 1, sampleRate: 16_000, in: temporaryDirectory)
+        let logs = temporaryDirectory.appendingPathComponent("logs", isDirectory: true)
+        let apiKey = "secret-key-987654"
+
+        GeminiMockURLProtocol.reset()
+        defer { GeminiMockURLProtocol.reset() }
+        let service = makeMockGeminiService(diagnosticsDirectory: logs)
+
+        func run() async throws -> Transcript {
+            try await service.transcribe(
+                audioURL: audioURL,
+                sourceName: audioURL.lastPathComponent,
+                localeIdentifier: "auto",
+                credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: apiKey)],
+                options: GeminiTranscriptionOptions(),
+                audioExtractor: try FFmpegAudioExtractor()
+            )
+        }
+
+        func logFiles() -> [URL] {
+            ((try? FileManager.default.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.lastPathComponent.hasPrefix("gemini-reply-") }
+        }
+
+        _ = try await run()
+        try expect(logFiles().isEmpty, "A successful run must not write a diagnostic log.")
+
+        GeminiMockURLProtocol.interactionMode = .emptyOutputText
+        do {
+            _ = try await run()
+            throw SmokeTestFailure.failed("An empty reply must fail.")
+        } catch is GeminiTranscriptionError {}
+
+        let written = logFiles()
+        try expect(written.count == 1, "An unparseable reply should write exactly one diagnostic log, wrote \(written.count).")
+        let contents = try String(contentsOf: written[0], encoding: .utf8)
+        try expect(contents.contains("HTTP status: 200"), "The diagnostic log should record the HTTP status.")
+        try expect(contents.contains("Failure:"), "The diagnostic log should record which failure it was.")
+        try expect(contents.contains(#""status":"completed""#), "The diagnostic log should contain the raw reply body.")
+        try expect(!contents.contains(apiKey), "The diagnostic log must never contain the API key.")
+
+        // An unwritable log location must not turn a parse failure into a crash
+        // or hide the real error.
+        GeminiMockURLProtocol.reset()
+        GeminiMockURLProtocol.interactionMode = .inProgress
+        let blocker = temporaryDirectory.appendingPathComponent("not-a-directory")
+        try Data("x".utf8).write(to: blocker)
+        let unwritable = makeMockGeminiService(diagnosticsDirectory: blocker.appendingPathComponent("logs"))
+        do {
+            _ = try await unwritable.transcribe(
+                audioURL: audioURL,
+                sourceName: audioURL.lastPathComponent,
+                localeIdentifier: "auto",
+                credentials: [GeminiAPIKeyCredential(id: UUID(), apiKey: apiKey)],
+                options: GeminiTranscriptionOptions(),
+                audioExtractor: try FFmpegAudioExtractor()
+            )
+            throw SmokeTestFailure.failed("An in-progress reply must fail.")
+        } catch let error as GeminiTranscriptionError {
+            try expect(error == .incompleteResponse, "A log write failure must not replace the real error, got \(error).")
+        }
     }
 
     private static func testGeminiModelAccessVerification() async throws {
@@ -1573,6 +2009,24 @@ enum TranscriberCoreSmokeTests {
     }
 }
 
+
+private final class ProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [GeminiTranscriptionProgress] = []
+
+    func record(_ progress: GeminiTranscriptionProgress) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.append(progress)
+    }
+
+    func snapshot() -> [GeminiTranscriptionProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries
+    }
+}
+
 private final class GeminiMockURLProtocol: URLProtocol {
     enum ModelLookupMode {
         case available
@@ -1580,7 +2034,27 @@ private final class GeminiMockURLProtocol: URLProtocol {
         case unauthorized
     }
 
+    /// What the mock's interactions endpoint answers with. `.standard` follows
+    /// `includeWordAnnotations`; the others are reply shapes seen or feared in
+    /// production.
+    enum InteractionMode {
+        case standard
+        case outputTextOnly
+        case stepsOnly
+        case emptyOutputText
+        case inProgress
+        case noTextNodes
+        case notAnObject
+        case emptyBody
+        case failed
+    }
+
     static private(set) var interactionBodies: [Data] = []
+    static private(set) var uploadCount = 0
+    static var interactionMode: InteractionMode = .standard
+    /// The first N interactions answer with an empty reply, then replies turn
+    /// normal, as when Google rejects a long span but accepts shorter ones.
+    static var emptyReplyCount = 0
     static private(set) var interactionRequestCount = 0
     static private(set) var recordedAPIKeys: [String] = []
     static private(set) var uploadAPIKeys: [String] = []
@@ -1593,6 +2067,9 @@ private final class GeminiMockURLProtocol: URLProtocol {
     static func reset() {
         interactionBodies = []
         interactionRequestCount = 0
+        uploadCount = 0
+        interactionMode = .standard
+        emptyReplyCount = 0
         recordedAPIKeys = []
         uploadAPIKeys = []
         uploadContentTypes = []
@@ -1650,6 +2127,7 @@ private final class GeminiMockURLProtocol: URLProtocol {
                 body = Data()
             }
         case ("POST", "/upload-session"):
+            Self.uploadCount += 1
             Self.uploadAPIKeys.append(request.value(forHTTPHeaderField: "x-goog-api-key") ?? "")
             Self.uploadContentTypes.append(request.value(forHTTPHeaderField: "Content-Type") ?? "")
             statusCode = 200
@@ -1691,6 +2169,29 @@ private final class GeminiMockURLProtocol: URLProtocol {
     override func stopLoading() {}
 
     private static func interactionResponse() -> Data {
+        if interactionRequestCount <= emptyReplyCount {
+            return Data(#"{"status":"completed","usage":{"total_output_tokens":0}}"#.utf8)
+        }
+        switch interactionMode {
+        case .standard:
+            break
+        case .outputTextOnly:
+            return Data(#"{"status":"completed","output_text":"Hello world"}"#.utf8)
+        case .stepsOnly:
+            return Data(#"{"status":"completed","steps":[{"content":[{"type":"text","text":"Hello world"}]}]}"#.utf8)
+        case .emptyOutputText:
+            return Data(#"{"status":"completed","output_text":"   ","steps":[{"content":[]}]}"#.utf8)
+        case .inProgress:
+            return Data(#"{"status":"in_progress"}"#.utf8)
+        case .noTextNodes:
+            return Data(#"{"status":"completed","steps":[{"content":[{"type":"thought","summary":"nothing"}]}]}"#.utf8)
+        case .notAnObject:
+            return Data(#"["unexpected"]"#.utf8)
+        case .emptyBody:
+            return Data(#"{}"#.utf8)
+        case .failed:
+            return Data(#"{"status":"failed","error":{"message":"mock provider failure"}}"#.utf8)
+        }
         if includeWordAnnotations {
             return Data(#"{"status":"completed","output_text":"Hello world","steps":[{"content":[{"type":"word_info","text":"Hello","start_offset":{"seconds":"0","nanos":100000000},"end_offset":"0.45s"},{"type":"word_info","text":"world","start_offset":"0.50s","end_offset":"0.90s"}]}]}"#.utf8)
         }

@@ -48,13 +48,13 @@ Authoritative provider references:
   missing model access is caught before a long lecture upload. The same check
   runs again during Start preflight for enabled keys.
 - Tare measures the extracted audio with `ffprobe` before upload. It uses a
-  55-minute safe chunk limit for unannotated requests and 28 minutes for
-  annotated requests, below Google’s documented limits.
+  28-minute safe chunk limit for both plain and annotated requests (Google
+  documents one hour for plain, but returned empty replies above ~30 minutes).
 - Multi-hour recordings are split into the minimum safe number of core spans.
   Detected silence is preferred for interior boundaries; each boundary carries
   1.5 seconds of context, and the assembled transcript removes only matching
   boundary words. All final word timestamps are translated back to the source
-  timeline. A 2h30m plain lecture plans as 3 safe chunks; annotated mode plans
+  timeline. A 2h30m plain lecture plans as 6 safe chunks; annotated mode plans
   as 6 safe chunks. Progress shows chunk count and estimated audio tokens.
 - Cloud audio is extracted to lossless FLAC while preserving sample rate and
   channel count. Files API uploads are streamed from disk, checked against the
@@ -88,9 +88,15 @@ Authoritative provider references:
   the raw reply to `~/Library/Logs/Tare/gemini-reply-<timestamp>.txt` (HTTP
   status, content type, body up to 256 KB). The API key is a request header
   and is never in that file. Observed 2026-10-04: a 67.6-minute m4a failed this
-  way after 32 s while a 61-minute m4a succeeded; the cause was not yet known
-  because the reply was not kept. Read the newest log file on the next
-  occurrence.
+  way after 32 s while a 61-minute m4a succeeded. The next failure's log showed
+  the cause: a 2xx reply with usage (about 50,700 audio tokens, so a ~34-minute
+  span) and 0 output tokens, but no transcript content at all. Google accepts
+  plain spans of ~30 minutes yet returns nothing for ~34, despite documenting one
+  hour. Tare therefore (1) plans plain requests at the same 28-minute safe limit
+  as annotated ones, and (2) if a span still comes back empty or incomplete,
+  splits it in half (with overlap) and retries, down to 4 minutes, showing
+  "Splitting it in half and retrying" in progress. Read the newest log file on
+  any further failure.
 
 ## Validation
 
@@ -117,3 +123,16 @@ to different projects with separate quotas. If `ffprobe` cannot read a
 duration, Tare stops before uploading rather than guessing a request size.
 Very large individual chunks still respect the 2 GB Files API guard and report
 an actionable failure instead of truncating audio.
+
+## Regression coverage
+
+`swift run TranscriberCoreSmokeTests` covers: the observed 4053 s and 3684 s
+durations; an invariant sweep of the chunk planner (starts at 0, ends at the
+duration, every chunk under the limit, overlap, no tiny chunk) across 1 s to 6 h
+with and without silence boundaries; an end-to-end multi-chunk run against the
+mock API (two interactions, progress totals, no leftover temp files, cleanup on
+failure); split-and-retry when a span returns empty (and a bounded stop when
+every reply is empty); accepted and refused reply shapes; and the diagnostic log
+(written once on a bad reply, never contains the API key, not written on
+success). These tests use a mock API, so they prove Tare's behavior given a
+reply shape, not what Google will actually return.

@@ -117,14 +117,22 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
 
     private let session: URLSession
     private let baseURL: URL
+    private let diagnosticsDirectory: URL
     private let decoder = JSONDecoder()
+
+    public static var defaultDiagnosticsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Tare", isDirectory: true)
+    }
 
     public init(
         session: URLSession? = nil,
-        baseURL: URL = URL(string: "https://generativelanguage.googleapis.com")!
+        baseURL: URL = URL(string: "https://generativelanguage.googleapis.com")!,
+        diagnosticsDirectory: URL = GeminiTranscriptionService.defaultDiagnosticsDirectory
     ) {
         self.session = session ?? URLSession(configuration: .ephemeral)
         self.baseURL = baseURL
+        self.diagnosticsDirectory = diagnosticsDirectory
     }
 
     /// Lightweight authenticated check that the key/project can see the
@@ -385,60 +393,22 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         for chunk in plan.chunks {
             try Task.checkCancellation()
 
-            let chunkURL: URL
-            let shouldRemoveChunk: Bool
-            if plan.isChunked {
-                chunkURL = try await audioExtractor.extractAudioChunk(
-                    from: audioURL,
-                    startTime: chunk.startTime,
-                    duration: chunk.duration,
-                    preserveSourceQuality: true
-                )
-                shouldRemoveChunk = true
-            } else {
-                chunkURL = audioURL
-                shouldRemoveChunk = false
-            }
-
-            do {
-                progress(
-                    GeminiTranscriptionProgress(
-                        phase: plan.isChunked
-                            ? "Transcribing chunk \(chunk.index) of \(plan.chunks.count) · ~\(GeminiTranscriptionPlan.formattedTokenCount(plan.estimatedInputTokens)) audio tokens"
-                            : "Transcribing with Gemini 3.5 Transcribe · ~\(GeminiTranscriptionPlan.formattedTokenCount(plan.estimatedInputTokens)) audio tokens",
-                        completedChunks: chunk.index - 1,
-                        totalChunks: plan.chunks.count,
-                        estimatedInputTokens: plan.estimatedInputTokens
-                    )
-                )
-
-                let result = try await transcribeChunk(
-                    audioURL: chunkURL,
-                    sourceName: sourceName,
-                    localeIdentifier: localeIdentifier,
-                    credentials: usableCredentials,
-                    options: validatedOptions,
-                    startingCredentialIndex: nextCredentialIndex,
-                    chunkProgress: GeminiChunkProgress(
-                        completedChunks: chunk.index - 1,
-                        totalChunks: plan.chunks.count,
-                        estimatedInputTokens: plan.estimatedInputTokens
-                    ),
-                    progress: progress,
-                    onCredentialUsed: onCredentialUsed
-                )
-                nextCredentialIndex = (result.credentialIndex + 1) % usableCredentials.count
-                chunkResults.append((chunk, result.transcript))
-            } catch {
-                if shouldRemoveChunk {
-                    try? FileManager.default.removeItem(at: chunkURL)
-                }
-                throw error
-            }
-
-            if shouldRemoveChunk {
-                try? FileManager.default.removeItem(at: chunkURL)
-            }
+            let spanResults = try await transcribeSpan(
+                chunk,
+                isWholeFile: !plan.isChunked,
+                chunkLabel: "\(chunk.index) of \(plan.chunks.count)",
+                plan: plan,
+                audioURL: audioURL,
+                sourceName: sourceName,
+                localeIdentifier: localeIdentifier,
+                credentials: usableCredentials,
+                options: validatedOptions,
+                audioExtractor: audioExtractor,
+                nextCredentialIndex: &nextCredentialIndex,
+                progress: progress,
+                onCredentialUsed: onCredentialUsed
+            )
+            chunkResults.append(contentsOf: spanResults)
 
             progress(
                 GeminiTranscriptionProgress(
@@ -452,12 +422,134 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
             )
         }
 
+        // Spans that had to be split are renumbered by position so assembly keeps
+        // the recording's order.
+        let ordered = chunkResults
+            .sorted { $0.0.startTime < $1.0.startTime }
+            .enumerated()
+            .map { offset, pair in
+                (GeminiAudioChunk(index: offset + 1, startTime: pair.0.startTime, endTime: pair.0.endTime), pair.1)
+            }
+
         return Self.assembleTranscript(
             sourceName: sourceName,
             localeIdentifier: localeIdentifier,
-            chunks: chunkResults
+            chunks: ordered
         )
     }
+
+    /// Transcribes one planned span. Google sometimes answers 2xx with no
+    /// transcript for a span it accepted (observed on ~34-minute plain spans
+    /// while ~30-minute ones succeeded). Rather than fail a long lecture, a span
+    /// that comes back empty or incomplete is split in half, each half overlapping
+    /// the cut for context, and tried again, down to `minimumSplitSeconds`.
+    private func transcribeSpan(
+        _ chunk: GeminiAudioChunk,
+        isWholeFile: Bool,
+        chunkLabel: String,
+        plan: GeminiTranscriptionPlan,
+        audioURL: URL,
+        sourceName: String,
+        localeIdentifier: String,
+        credentials: [GeminiAPIKeyCredential],
+        options: GeminiTranscriptionOptions,
+        audioExtractor: FFmpegAudioExtractor,
+        nextCredentialIndex: inout Int,
+        progress: @escaping @Sendable (GeminiTranscriptionProgress) -> Void,
+        onCredentialUsed: @escaping @Sendable (UUID) -> Void
+    ) async throws -> [(GeminiAudioChunk, GeminiChunkTranscript)] {
+        let chunkURL: URL
+        let shouldRemoveChunk: Bool
+        if isWholeFile {
+            chunkURL = audioURL
+            shouldRemoveChunk = false
+        } else {
+            chunkURL = try await audioExtractor.extractAudioChunk(
+                from: audioURL,
+                startTime: chunk.startTime,
+                duration: chunk.duration,
+                preserveSourceQuality: true
+            )
+            shouldRemoveChunk = true
+        }
+        defer {
+            if shouldRemoveChunk {
+                try? FileManager.default.removeItem(at: chunkURL)
+            }
+        }
+
+        progress(
+            GeminiTranscriptionProgress(
+                phase: plan.isChunked || !isWholeFile
+                    ? "Transcribing chunk \(chunkLabel) · ~\(GeminiTranscriptionPlan.formattedTokenCount(Int64(chunk.duration) * Int64(GeminiTranscriptionLimits.audioTokensPerSecond))) audio tokens"
+                    : "Transcribing with Gemini 3.5 Transcribe · ~\(GeminiTranscriptionPlan.formattedTokenCount(plan.estimatedInputTokens)) audio tokens",
+                completedChunks: max(0, min(chunk.index - 1, plan.chunks.count)),
+                totalChunks: plan.chunks.count,
+                estimatedInputTokens: plan.estimatedInputTokens
+            )
+        )
+
+        do {
+            let result = try await transcribeChunk(
+                audioURL: chunkURL,
+                sourceName: sourceName,
+                localeIdentifier: localeIdentifier,
+                credentials: credentials,
+                options: options,
+                startingCredentialIndex: nextCredentialIndex,
+                chunkProgress: GeminiChunkProgress(
+                    completedChunks: max(0, min(chunk.index - 1, plan.chunks.count)),
+                    totalChunks: plan.chunks.count,
+                    estimatedInputTokens: plan.estimatedInputTokens
+                ),
+                progress: progress,
+                onCredentialUsed: onCredentialUsed
+            )
+            nextCredentialIndex = (result.credentialIndex + 1) % credentials.count
+            return [(chunk, result.transcript)]
+        } catch let error as GeminiTranscriptionError
+            where (error == .emptyResponse || error == .incompleteResponse)
+            && chunk.duration >= Self.minimumSplitSeconds * 2 {
+            let overlap = GeminiTranscriptionLimits.boundaryContextOverlapSeconds
+            let middle = chunk.startTime + chunk.duration / 2
+            let halves = [
+                GeminiAudioChunk(index: chunk.index, startTime: chunk.startTime, endTime: middle + overlap),
+                GeminiAudioChunk(index: chunk.index, startTime: middle - overlap, endTime: chunk.endTime)
+            ]
+            progress(
+                GeminiTranscriptionProgress(
+                    phase: "Google returned no text for chunk \(chunkLabel). Splitting it in half and retrying…",
+                    completedChunks: max(0, min(chunk.index - 1, plan.chunks.count)),
+                    totalChunks: plan.chunks.count,
+                    estimatedInputTokens: plan.estimatedInputTokens
+                )
+            )
+
+            var results: [(GeminiAudioChunk, GeminiChunkTranscript)] = []
+            for (offset, half) in halves.enumerated() {
+                try Task.checkCancellation()
+                results += try await transcribeSpan(
+                    half,
+                    isWholeFile: false,
+                    chunkLabel: "\(chunkLabel) (part \(offset + 1) of 2)",
+                    plan: plan,
+                    audioURL: audioURL,
+                    sourceName: sourceName,
+                    localeIdentifier: localeIdentifier,
+                    credentials: credentials,
+                    options: options,
+                    audioExtractor: audioExtractor,
+                    nextCredentialIndex: &nextCredentialIndex,
+                    progress: progress,
+                    onCredentialUsed: onCredentialUsed
+                )
+            }
+            return results
+        }
+    }
+
+    /// A span shorter than twice this is never split further.
+    static let minimumSplitSeconds: TimeInterval = 120
 
     private func transcribeChunk(
         audioURL: URL,
@@ -765,7 +857,7 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
         } catch let error as GeminiTranscriptionError {
             switch error {
             case .emptyResponse, .incompleteResponse:
-                Self.saveDiagnostic(data, response: response, failure: error)
+                saveDiagnostic(data, response: response, failure: error)
             default:
                 break
             }
@@ -776,13 +868,12 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
     /// Keeps the raw reply when Google answers 2xx but Tare finds no usable
     /// transcript, so the next failure shows what actually came back. The API
     /// key travels in a request header and is never part of this body.
-    private static func saveDiagnostic(
+    private func saveDiagnostic(
         _ data: Data,
         response: HTTPURLResponse,
         failure: GeminiTranscriptionError
     ) {
-        let directory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Tare", isDirectory: true)
+        let directory = diagnosticsDirectory
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let url = directory.appendingPathComponent("gemini-reply-\(stamp).txt")
         let limit = 256 * 1024
