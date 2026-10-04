@@ -8,10 +8,15 @@ struct WorkspaceView: View {
     @Binding var detailJobID: TranscriptionJob.ID?
 
     var body: some View {
-        if let id = detailJobID {
-            TranscriptPage(store: store, jobID: id)
-        } else {
-            filesPage
+        switch store.workspaceMode {
+        case .library:
+            LibraryView(store: store)
+        case .files:
+            if let id = detailJobID {
+                TranscriptPage(store: store, jobID: id)
+            } else {
+                filesPage
+            }
         }
     }
 

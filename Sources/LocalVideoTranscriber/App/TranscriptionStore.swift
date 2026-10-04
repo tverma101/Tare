@@ -42,6 +42,12 @@ final class TranscriptionStore: ObservableObject {
     }
     /// Which page the single window is showing.
     @Published var page: AppPage = .transcribe
+    /// Which list the main window shows: the files being worked on, or earlier results.
+    @Published var workspaceMode: WorkspaceMode = .files
+    @Published private(set) var pastTranscripts: [PastTranscript] = []
+    @Published private(set) var isScanningPast = false
+    @Published var openPastTranscriptID: String?
+    @Published var openPastTranscriptText: String?
     @Published var libraryDirectory: URL {
         didSet {
             UserDefaults.standard.set(libraryDirectory.path, forKey: Self.libraryDirectoryDefaultsKey)
@@ -2222,5 +2228,26 @@ private final class LockedURLBox: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storage
+    }
+}
+
+enum WorkspaceMode: Hashable {
+    case files
+    case library
+}
+
+extension TranscriptionStore {
+    /// Looks for earlier results on disk without blocking the window.
+    func refreshPastTranscripts() {
+        guard !isScanningPast else { return }
+        isScanningPast = true
+        let roots = PastTranscriptScanner.roots(outputDirectory: outputDirectory)
+        Task {
+            let found = await Task.detached(priority: .userInitiated) {
+                PastTranscriptScanner.scan(roots: roots)
+            }.value
+            pastTranscripts = found
+            isScanningPast = false
+        }
     }
 }

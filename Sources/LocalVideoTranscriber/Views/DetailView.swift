@@ -290,7 +290,7 @@ private struct JobTimingView: View {
 /// SwiftUI `Text` lays out its whole string eagerly, which is slow and heavy for
 /// a lecture-length transcript. `NSTextView` lays out lazily, scrolls smoothly,
 /// supports selection, and gives ⌘F find for free.
-private struct TranscriptReader: View {
+struct TranscriptReader: View {
     let text: String
 
     private var wordCount: Int {
