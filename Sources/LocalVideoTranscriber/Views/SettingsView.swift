@@ -9,30 +9,6 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: Space.group) {
-                Button {
-                    store.page = .transcribe
-                } label: {
-                    Label("Back to Files", systemImage: "chevron.left")
-                }
-                .keyboardShortcut(.cancelAction)
-                .help("Return to your files (Esc)")
-
-                Spacer()
-
-                Text("Settings")
-                    .font(Typography.pageTitle)
-
-                Spacer()
-
-                // Balances the Back button so the title stays centred.
-                Color.clear.frame(width: 110, height: 1)
-            }
-            .padding(.horizontal, Space.page)
-            .padding(.vertical, Space.group)
-
-            Divider()
-
             HStack(spacing: 0) {
                 List(
                     SettingsTab.allCases,

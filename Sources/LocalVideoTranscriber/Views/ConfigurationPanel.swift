@@ -1,9 +1,8 @@
 import SwiftUI
 import TranscriberCore
 
-/// The left pane: everything that decides what a batch does, top to bottom in the
-/// order you decide it. Pick a model, pick a language, pick where the files go,
-/// then press the one button at the bottom.
+/// The left pane: a grouped form in the system's own style. Pick a model, a
+/// language and where the files go, then press the one button at the bottom.
 struct ConfigurationPanel: View {
     @ObservedObject var store: TranscriptionStore
     @State private var isShowingOptions = false
@@ -11,134 +10,111 @@ struct ConfigurationPanel: View {
     private var isBusy: Bool { store.isRunning || store.isPreparingModel }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Space.page + Space.close) {
-                    modelSection
-                    languageSection
-                    outputSection
+        Form {
+            modelSection
+            languageSection
+            outputSection
 
-                    if let issue = store.setupIssue {
-                        IssueBanner(issue: issue) { tab in
-                            store.page = .settings(tab)
-                        }
+            if let issue = store.setupIssue {
+                Section {
+                    IssueBanner(issue: issue) { tab in
+                        store.page = .settings(tab)
                     }
                 }
-                .padding(Space.page)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Divider()
-
+        }
+        .formStyle(.grouped)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             startArea
         }
-        .background(Palette.contentBackground)
     }
 
     // MARK: Model
 
     private var modelSection: some View {
-        PanelSection(title: "Model", step: 1) {
-            VStack(spacing: Space.close) {
-                ForEach(store.installedModelPresets) { preset in
-                    ModelCard(
-                        title: preset.displayName,
-                        subtitle: ModelChoice.tagline(for: preset),
-                        footnote: store.modelStatus(for: preset)?.sizeDescription,
-                        badge: nil,
-                        isSelected: store.isActiveModel(preset),
-                        isDisabled: isBusy
-                    ) {
-                        store.selectModel(preset)
-                    }
-                }
-
-                ModelCard(
-                    title: "Google Gemini",
-                    subtitle: "Cloud · sends audio to Google",
-                    footnote: nil,
-                    badge: store.geminiUsableAPIKeyCount == 0 ? "Needs API key" : nil,
-                    isSelected: store.isUsingGeminiTranscription,
+        Section {
+            ForEach(store.installedModelPresets) { preset in
+                ModelRow(
+                    title: preset.displayName,
+                    subtitle: ModelChoice.tagline(for: preset),
+                    detail: store.modelStatus(for: preset)?.sizeDescription,
+                    badge: nil,
+                    isSelected: store.isActiveModel(preset),
                     isDisabled: isBusy
                 ) {
-                    store.useGeminiTranscription()
+                    store.selectModel(preset)
                 }
-
-                if store.installedModelPresets.isEmpty && store.didFinishModelScan {
-                    Text("No speech models are installed on this Mac yet.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Palette.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                Button(store.installedModelPresets.isEmpty ? "Download a Model…" : "Get More Models…") {
-                    store.page = .settings(.models)
-                }
-                .buttonStyle(.link)
-                .font(Typography.caption)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            ModelRow(
+                title: "Google Gemini",
+                subtitle: "Cloud · sends audio to Google",
+                detail: nil,
+                badge: store.geminiUsableAPIKeyCount == 0 ? "Needs API key" : nil,
+                isSelected: store.isUsingGeminiTranscription,
+                isDisabled: isBusy
+            ) {
+                store.useGeminiTranscription()
+            }
+
+            if store.installedModelPresets.isEmpty && store.didFinishModelScan {
+                Text("No speech models are installed on this Mac yet.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textSecondary)
+            }
+
+            Button(store.installedModelPresets.isEmpty ? "Download a Model…" : "Get More Models…") {
+                store.page = .settings(.models)
+            }
+            .buttonStyle(.link)
+            .font(Typography.caption)
+        } header: {
+            Text("Model")
         }
     }
 
     // MARK: Language
 
     private var languageSection: some View {
-        PanelSection(title: "Language", step: 2) {
+        Section {
             Picker("Language", selection: $store.localeIdentifier) {
                 ForEach(WhisperLanguagePreset.all) { preset in
                     Text(preset.displayName).tag(preset.id)
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
             .disabled(isBusy)
-            .accessibilityLabel("Language")
         }
     }
 
     // MARK: Output
 
     private var outputSection: some View {
-        PanelSection(title: "Output", step: 3) {
-            VStack(alignment: .leading, spacing: Space.close) {
-                DisclosureGroup(isExpanded: $isShowingOptions) {
-                    OutputOptionsView(store: store)
-                        .padding(.top, Space.close)
-                } label: {
-                    HStack(spacing: Space.close) {
-                        Text("Files")
-                            .foregroundStyle(Palette.textSecondary)
-                        Spacer(minLength: Space.close)
-                        Text(store.outputFormatSummary)
-                            .lineLimit(1)
-                    }
+        Section {
+            DisclosureGroup(isExpanded: $isShowingOptions) {
+                OutputOptionsView(store: store)
+                    .padding(.top, Space.close)
+            } label: {
+                LabeledContent("Files", value: store.outputFormatSummary)
                     .contentShape(Rectangle())
                     .onTapGesture { isShowingOptions.toggle() }
-                }
-
-                HStack(spacing: Space.close) {
-                    Image(systemName: "folder")
-                        .foregroundStyle(Palette.textSecondary)
-                        .accessibilityHidden(true)
-
-                    Text(store.outputPathForDisplay)
-                        .font(Typography.caption)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(store.currentOutputDirectory.path)
-
-                    Spacer(minLength: 0)
-                }
-
-                HStack(spacing: Space.group) {
-                    Button("Show in Finder") { store.revealOutputDirectory() }
-                    Button("Change…") { store.presentOutputDirectoryPicker() }
-                        .disabled(isBusy)
-                }
-                .buttonStyle(.link)
-                .font(Typography.caption)
             }
+
+            LabeledContent("Save to") {
+                Text(store.outputPathForDisplay)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(store.currentOutputDirectory.path)
+            }
+
+            HStack(spacing: Space.group) {
+                Button("Show in Finder") { store.revealOutputDirectory() }
+                Button("Change…") { store.presentOutputDirectoryPicker() }
+                    .disabled(isBusy)
+            }
+            .buttonStyle(.link)
+            .font(Typography.caption)
+        } header: {
+            Text("Output")
         }
     }
 
@@ -146,15 +122,19 @@ struct ConfigurationPanel: View {
 
     private var startArea: some View {
         VStack(alignment: .leading, spacing: Space.close) {
+            Divider()
+
             if !isBusy, let reason = store.startBlockedReason {
                 Label(reason, systemImage: "info.circle")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Space.page)
             } else if !isBusy, store.jobs.isEmpty {
                 Text("Add files to begin.")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
+                    .padding(.horizontal, Space.page)
             }
 
             Button {
@@ -180,8 +160,10 @@ struct ConfigurationPanel: View {
             .disabled(!isBusy && !store.canStart)
             .keyboardShortcut(.return, modifiers: [.command])
             .help(isBusy ? "Stop the batch" : "Transcribe the queued files (⌘↩)")
+            .padding(.horizontal, Space.page)
+            .padding(.bottom, Space.page)
         }
-        .padding(Space.page)
+        .background(.bar)
     }
 
     private var startTitle: String {
@@ -193,38 +175,12 @@ struct ConfigurationPanel: View {
     }
 }
 
-private struct PanelSection<Content: View>: View {
-    let title: String
-    let step: Int
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.close) {
-            HStack(spacing: Space.close) {
-                Text("\(step)")
-                    .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundStyle(Color.white)
-                    .frame(width: 16, height: 16)
-                    .background(Circle().fill(Palette.textSecondary))
-                    .accessibilityHidden(true)
-
-                Text(title)
-                    .font(Typography.sectionHeader)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-
-            content()
-        }
-    }
-}
-
-/// One selectable model. A visible card with a radio mark reads as a choice at a
-/// glance, where a closed pop-up menu hides the options it offers.
-private struct ModelCard: View {
+/// One selectable model, as a row with a checkmark — the way System Settings
+/// shows a choice among a few options.
+private struct ModelRow: View {
     let title: String
     let subtitle: String
-    let footnote: String?
+    let detail: String?
     let badge: String?
     let isSelected: Bool
     let isDisabled: Bool
@@ -232,28 +188,14 @@ private struct ModelCard: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .top, spacing: Space.close) {
-                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(isSelected ? Palette.accent : Palette.textTertiary)
-                    .font(.system(size: 14))
-                    .accessibilityHidden(true)
-
+            HStack(spacing: Space.close) {
                 VStack(alignment: .leading, spacing: Space.optical) {
                     Text(title)
-                        .font(Typography.rowTitleEmphasized)
                         .foregroundStyle(Palette.textPrimary)
-                        .multilineTextAlignment(.leading)
 
-                    Text(subtitle)
+                    Text([subtitle, detail].compactMap { $0 }.joined(separator: " · "))
                         .font(Typography.caption)
                         .foregroundStyle(Palette.textSecondary)
-                        .multilineTextAlignment(.leading)
-
-                    if let footnote {
-                        Text(footnote)
-                            .font(Typography.caption)
-                            .foregroundStyle(Palette.textTertiary)
-                    }
 
                     if let badge {
                         Text(badge)
@@ -263,18 +205,15 @@ private struct ModelCard: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Palette.accent)
+                        .accessibilityHidden(true)
+                }
             }
-            .padding(Space.close + Space.optical)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: Radius.card)
-                    .fill(isSelected ? Palette.accentFill : Palette.pageBackground)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card)
-                    .strokeBorder(isSelected ? Palette.accent : Palette.hairline, lineWidth: isSelected ? 1.5 : 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: Radius.card))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)

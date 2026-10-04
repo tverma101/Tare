@@ -9,9 +9,7 @@ struct WorkspaceView: View {
 
     var body: some View {
         if let id = detailJobID {
-            TranscriptPage(store: store, jobID: id) {
-                detailJobID = nil
-            }
+            TranscriptPage(store: store, jobID: id)
         } else {
             filesPage
         }
@@ -19,14 +17,11 @@ struct WorkspaceView: View {
 
     private var filesPage: some View {
         VStack(spacing: 0) {
-            header
-
-            Divider()
-
             if store.jobs.isEmpty {
                 DropZoneView(store: store)
             } else {
                 QueueTableView(store: store, detailJobID: $detailJobID)
+                    .overlay { DropHighlight(isTargeted: store.dropIsTargeted) }
             }
 
             if store.isRunning || store.isPreparingModel {
@@ -38,75 +33,28 @@ struct WorkspaceView: View {
             }
         }
     }
+}
 
-    private var header: some View {
-        HStack(spacing: Space.group) {
-            VStack(alignment: .leading, spacing: Space.optical) {
-                Text("Files")
-                    .font(Typography.pageTitle)
+/// The system-style drop target outline over the file list while files are
+/// dragged in.
+private struct DropHighlight: View {
+    let isTargeted: Bool
 
-                Text(summary)
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
+    var body: some View {
+        RoundedRectangle(cornerRadius: Radius.card)
+            .strokeBorder(Palette.active, lineWidth: 3)
+            .background(Palette.accentFill, in: RoundedRectangle(cornerRadius: Radius.card))
+            .padding(Space.close)
+            .opacity(isTargeted ? 1 : 0)
+            .allowsHitTesting(false)
+            .animation(.easeOut(duration: 0.12), value: isTargeted)
+            .overlay {
+                if isTargeted {
+                    Label("Drop to add", systemImage: "plus.circle.fill")
+                        .font(Typography.pageTitle)
+                        .foregroundStyle(Palette.active)
+                }
             }
-
-            Spacer(minLength: Space.group)
-
-            if store.jobs.count > 1 {
-                Picker("Show", selection: $store.queueFilter) {
-                    ForEach(TranscriptionStore.QueueFilter.allCases) { filter in
-                        Text("\(filter.displayName) (\(store.count(for: filter)))")
-                            .tag(filter)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-                .help("Filter the file list")
-            }
-
-            Menu("Queue") {
-                Button("Remove Selected") {
-                    store.removeSelectedJob()
-                }
-                .disabled(store.selectedJobID == nil || store.isScanning || store.isOrganizing)
-
-                Button("Clear Finished") {
-                    store.clearCompleted()
-                }
-                .disabled(store.isRunning || store.completedCount == 0)
-
-                Divider()
-
-                Button("Scan Folders for MKV") {
-                    Task { await store.scanForMKVs() }
-                }
-                .disabled(!store.canScanForMKVs)
-
-                Button("Clean Names & Organize…") {
-                    store.requestOrganizeConfirmation()
-                }
-                .disabled(!store.canCleanAndOrganizeMKVs)
-            }
-            .menuStyle(.button)
-            .fixedSize()
-
-            Button {
-                store.presentFilePicker()
-            } label: {
-                Label("Add Files…", systemImage: "plus")
-            }
-            .help("Add audio or video files (⌘O)")
-        }
-        .padding(.horizontal, Space.page)
-        .padding(.vertical, Space.group)
-    }
-
-    private var summary: String {
-        let count = store.jobs.count
-        guard count > 0 else { return "Nothing added yet" }
-        return "\(count) file\(count == 1 ? "" : "s")"
-            + (store.completedCount > 0 ? " · \(store.completedCount) done" : "")
     }
 }
 
@@ -213,45 +161,17 @@ private struct ResultBar: View {
     }
 }
 
-/// One file's transcript, as a page of the window with a way back. Not a sheet
-/// or a popup.
+/// One file's transcript, as a page of the window. The way back and Copy live
+/// in the window toolbar.
 struct TranscriptPage: View {
     @ObservedObject var store: TranscriptionStore
     let jobID: TranscriptionJob.ID
-    let close: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: Space.group) {
-                Button {
-                    close()
-                } label: {
-                    Label("Files", systemImage: "chevron.left")
-                }
-                .keyboardShortcut(.cancelAction)
-                .help("Back to the file list (Esc)")
-
-                Spacer()
-
-                if let text = job?.transcript?.fullText, !text.isEmpty {
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
-                    } label: {
-                        Label("Copy Transcript", systemImage: "doc.on.doc")
-                    }
-                }
-            }
-            .padding(.horizontal, Space.page)
-            .padding(.vertical, Space.group)
-
-            Divider()
-
-            if let job {
-                JobDetailView(store: store, job: job)
-            } else {
-                DetailPlaceholderView()
-            }
+        if let job {
+            JobDetailView(store: store, job: job)
+        } else {
+            DetailPlaceholderView()
         }
     }
 

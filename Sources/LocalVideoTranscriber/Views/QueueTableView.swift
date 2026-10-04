@@ -13,7 +13,7 @@ struct QueueTableView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Table(store.visibleJobs, selection: $store.selectedJobID) {
+        Table(of: TranscriptionJob.self, selection: $store.selectedJobID) {
             TableColumn("") { job in
                 StateCell(job: job)
             }
@@ -35,6 +35,13 @@ struct QueueTableView: View {
                 }
             }
             .width(Metric.actionsColumnWidth)
+        } rows: {
+            ForEach(store.visibleJobs) { job in
+                // Drag a row out to Finder, Mail or any other app: a finished file
+                // hands over its transcript, anything else its source recording.
+                TableRow(job)
+                    .itemProvider { Self.dragProvider(for: job) }
+            }
         }
         .tableStyle(.inset)
         .accessibilityLabel("Job queue")
@@ -74,6 +81,15 @@ struct QueueTableView: View {
     }
 }
 
+extension QueueTableView {
+    /// A real file, so the receiving app copies it exactly as Finder would.
+    static func dragProvider(for job: TranscriptionJob) -> NSItemProvider? {
+        let url = (job.status == .completed ? OutputFileKind.primary(in: job.outputURLs) : nil) ?? job.sourceURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return NSItemProvider(contentsOf: url)
+    }
+}
+
 /// The way to get the result, on the row that produced it.
 private struct ActionsCell: View {
     @ObservedObject var store: TranscriptionStore
@@ -84,14 +100,14 @@ private struct ActionsCell: View {
         HStack(spacing: Space.close) {
             switch job.status {
             case .completed:
-                if let primary = job.outputURLs.first {
+                if let primary = OutputFileKind.primary(in: job.outputURLs) {
                     Button("Open") { store.open(primary) }
                         .help("Open \(primary.lastPathComponent)")
                 }
                 if store.showTranscriptPreview {
                     Button("View") { showDetails() }
                         .help("Read the transcript and see every file")
-                } else if let primary = job.outputURLs.first {
+                } else if let primary = OutputFileKind.primary(in: job.outputURLs) {
                     Button("Show") { store.reveal(primary) }
                         .help("Show \(primary.lastPathComponent) in Finder")
                 }

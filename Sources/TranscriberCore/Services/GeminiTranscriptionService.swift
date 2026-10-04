@@ -103,9 +103,9 @@ public enum GeminiTranscriptionError: Error, LocalizedError, Hashable, Sendable 
         case .networkUnavailable:
             return "Tare could not reach Google Gemini. Check your internet connection, then choose Retry."
         case .emptyResponse:
-            return "Google Gemini finished without returning transcript text. Choose Retry or use another model."
+            return "Google Gemini finished without returning transcript text. Choose Retry or use another model. The raw reply was saved in ~/Library/Logs/Tare."
         case .incompleteResponse:
-            return "Google Gemini returned an incomplete transcript. Tare did not export partial text; choose Retry."
+            return "Google Gemini returned an incomplete transcript. Tare did not export partial text; choose Retry. The raw reply was saved in ~/Library/Logs/Tare."
         case .providerFailure(let message):
             return "Google Gemini could not transcribe this file. \(message)"
         }
@@ -760,7 +760,46 @@ public final class GeminiTranscriptionService: @unchecked Sendable {
             try await self.session.data(for: request)
         }
         try checkHTTP(data, response: response)
-        return try parseInteraction(data, requireAnnotations: options.usesAnnotatedOutput)
+        do {
+            return try parseInteraction(data, requireAnnotations: options.usesAnnotatedOutput)
+        } catch let error as GeminiTranscriptionError {
+            switch error {
+            case .emptyResponse, .incompleteResponse:
+                Self.saveDiagnostic(data, response: response, failure: error)
+            default:
+                break
+            }
+            throw error
+        }
+    }
+
+    /// Keeps the raw reply when Google answers 2xx but Tare finds no usable
+    /// transcript, so the next failure shows what actually came back. The API
+    /// key travels in a request header and is never part of this body.
+    private static func saveDiagnostic(
+        _ data: Data,
+        response: HTTPURLResponse,
+        failure: GeminiTranscriptionError
+    ) {
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Tare", isDirectory: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let url = directory.appendingPathComponent("gemini-reply-\(stamp).txt")
+        let limit = 256 * 1024
+        let body = String(decoding: data.prefix(limit), as: UTF8.self)
+        let header = """
+        Failure: \(failure.errorDescription ?? "unknown")
+        HTTP status: \(response.statusCode)
+        Content-Type: \(response.value(forHTTPHeaderField: "Content-Type") ?? "none")
+        Body bytes: \(data.count)\(data.count > limit ? " (truncated to \(limit))" : "")
+
+        """
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try (header + body).write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            // Diagnostics must never turn a recoverable failure into a different one.
+        }
     }
 
     private func deleteFile(named name: String, credential: GeminiAPIKeyCredential) async {

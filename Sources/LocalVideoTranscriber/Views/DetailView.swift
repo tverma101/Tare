@@ -317,36 +317,70 @@ private struct TranscriptReader: View {
     }
 }
 
+/// What a produced file is, in words, so no menu has to show file names like
+/// "Name.original-20261004-130918.m4a".
+enum OutputFileKind {
+    /// Files the user has no reason to open: Tare's own bookkeeping.
+    static func isInternal(_ url: URL) -> Bool {
+        url.lastPathComponent.hasSuffix(".tare-link.json")
+    }
+
+    static func title(for url: URL, source: URL) -> String {
+        let name = url.lastPathComponent.lowercased()
+        if name.contains(".original-") { return "Original Backup" }
+        if url.standardizedFileURL == source.standardizedFileURL { return "Original Recording" }
+        switch url.pathExtension.lowercased() {
+        case "srt": return "Subtitles (SRT)"
+        case "vtt": return "Subtitles (VTT)"
+        case "json": return name.contains("word") ? "Word Timings (JSON)" : "Transcript Data (JSON)"
+        case "ttml": return "Apple Music Lyrics (TTML)"
+        case "lrc": return "Lyrics (LRC)"
+        case "mkv", "mp4", "m4v", "mov": return "Video with Subtitles"
+        case "txt": return name.contains("timestamp") ? "Timestamped Transcript" : "Plain Transcript"
+        default: return url.deletingPathExtension().lastPathComponent
+        }
+    }
+
+    /// The file most people want: the plain-text transcript.
+    static func primary(in urls: [URL]) -> URL? {
+        let visible = urls.filter { !isInternal($0) }
+        return visible.first { $0.pathExtension.lowercased() == "txt" && !$0.lastPathComponent.lowercased().contains("timestamp") }
+            ?? visible.first { $0.pathExtension.lowercased() == "txt" }
+            ?? visible.first
+    }
+}
+
+/// Two plain buttons for the transcript, and a short menu for everything else.
 private struct OutputFilesBar: View {
     @ObservedObject var store: TranscriptionStore
     let job: TranscriptionJob
 
     var body: some View {
-        HStack(spacing: Space.group) {
-            Label(
-                "\(job.outputURLs.count) file\(job.outputURLs.count == 1 ? "" : "s") written",
-                systemImage: "doc.on.doc"
-            )
-            .font(Typography.caption)
-            .foregroundStyle(Palette.textSecondary)
+        let primary = OutputFileKind.primary(in: job.outputURLs)
+        let others = job.outputURLs.filter { !OutputFileKind.isInternal($0) && $0 != primary }
 
+        HStack(spacing: Space.close) {
             Spacer()
 
-            Menu("Show in Finder") {
-                ForEach(job.outputURLs, id: \.self) { url in
-                    Button(url.lastPathComponent) { store.reveal(url) }
-                }
-            }
-            .menuStyle(.button)
-            .fixedSize()
+            if let primary {
+                Button("Show in Finder") { store.reveal(primary) }
+                    .help("Show \(primary.lastPathComponent) in Finder")
 
-            Menu("Open") {
-                ForEach(job.outputURLs, id: \.self) { url in
-                    Button(url.lastPathComponent) { store.open(url) }
-                }
+                Button("Open Transcript") { store.open(primary) }
+                    .help("Open \(primary.lastPathComponent)")
             }
-            .menuStyle(.button)
-            .fixedSize()
+
+            if !others.isEmpty {
+                Menu("More") {
+                    ForEach(others, id: \.self) { url in
+                        Button(OutputFileKind.title(for: url, source: job.sourceURL)) { store.reveal(url) }
+                            .help(url.lastPathComponent)
+                    }
+                }
+                .menuStyle(.button)
+                .fixedSize()
+                .help("Show another file in Finder")
+            }
         }
         .padding(.horizontal, Space.page)
         .padding(.vertical, Space.close)

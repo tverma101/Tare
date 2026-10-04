@@ -83,6 +83,14 @@ Authoritative provider references:
   on a Mac with an Apple Development identity. A secret saved by an older
   ad-hoc bundle may require one final approval or re-entry during the
   transition.
+- When Google answers 2xx but the reply holds no usable transcript ("finished
+  without returning transcript text" or "incomplete transcript"), Tare writes
+  the raw reply to `~/Library/Logs/Tare/gemini-reply-<timestamp>.txt` (HTTP
+  status, content type, body up to 256 KB). The API key is a request header
+  and is never in that file. Observed 2026-10-04: a 67.6-minute m4a failed this
+  way after 32 s while a 61-minute m4a succeeded; the cause was not yet known
+  because the reply was not kept. Read the newest log file on the next
+  occurrence.
 
 ## Validation
 
