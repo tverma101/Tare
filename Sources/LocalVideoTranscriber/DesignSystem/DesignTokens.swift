@@ -44,7 +44,8 @@ enum Metric {
     static let sidebarMin: CGFloat = 200
     static let sidebarIdeal: CGFloat = 240
     static let sidebarMax: CGFloat = 300
-    static let detailMin: CGFloat = 520
+    static let detailMin: CGFloat = 480
+    static let configPanelWidth: CGFloat = 300
     static let detailIdeal: CGFloat = 760
 
     // Page chrome
@@ -68,6 +69,7 @@ enum Metric {
     static let progressColumnMin: CGFloat = 132
     static let progressColumnIdeal: CGFloat = 168
     static let progressColumnMax: CGFloat = 220
+    static let actionsColumnWidth: CGFloat = 96
     static let elapsedColumnWidth: CGFloat = 56
     static let outputsColumnWidth: CGFloat = 76
     static let noteColumnMin: CGFloat = 120
@@ -111,6 +113,7 @@ enum Palette {
     static let idle = Color(nsColor: .tertiaryLabelColor)
 
     // Fills
+    static let successFill = Color(nsColor: .systemGreen).opacity(0.12)
     static let warningFill = Color(nsColor: .systemOrange).opacity(0.12)
     static let dangerFill = Color(nsColor: .systemRed).opacity(0.12)
     static let accentFill = Color.accentColor.opacity(0.12)

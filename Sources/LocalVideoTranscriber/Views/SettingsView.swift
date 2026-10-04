@@ -1,21 +1,90 @@
 import SwiftUI
 import TranscriberCore
 
+/// Settings, as a page of the one window: a list of sections on the left, the
+/// selected section on the right, and a way back to the files.
 struct SettingsView: View {
     @ObservedObject var store: TranscriptionStore
-    @State private var freeLLMAPIKey = ""
-    @State private var pendingLibraryAction: LibraryAction?
+    let tab: SettingsTab
 
-    private enum LibraryAction: String, Identifiable {
-        case scan
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Space.group) {
+                Button {
+                    store.page = .transcribe
+                } label: {
+                    Label("Back to Files", systemImage: "chevron.left")
+                }
+                .keyboardShortcut(.cancelAction)
+                .help("Return to your files (Esc)")
 
-        var id: String { rawValue }
+                Spacer()
+
+                Text("Settings")
+                    .font(Typography.pageTitle)
+
+                Spacer()
+
+                // Balances the Back button so the title stays centred.
+                Color.clear.frame(width: 110, height: 1)
+            }
+            .padding(.horizontal, Space.page)
+            .padding(.vertical, Space.group)
+
+            Divider()
+
+            HStack(spacing: 0) {
+                List(
+                    SettingsTab.allCases,
+                    selection: Binding(
+                        get: { Optional(tab) },
+                        set: { if let new = $0 { store.page = .settings(new) } }
+                    )
+                ) { item in
+                    Label(item.title, systemImage: item.symbol)
+                        .tag(item)
+                }
+                .listStyle(.sidebar)
+                .frame(width: 180)
+
+                Divider()
+
+                Group {
+                    switch tab {
+                    case .general: GeneralSettingsPane(store: store)
+                    case .models: ModelsView(store: store)
+                    case .cloud: CloudTranscriptionView(store: store)
+                    case .library: LibrarySettingsPane(store: store)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
     }
+}
+
+private struct GeneralSettingsPane: View {
+    @ObservedObject var store: TranscriptionStore
+    @State private var freeLLMAPIKey = ""
 
     var body: some View {
         Form {
-            Section("Recognition") {
+            Section("After a batch") {
+                Toggle("Show a transcript preview for each finished file", isOn: $store.showTranscriptPreview)
+
+                Text("On: finished files get a View button that opens the transcript inside Tare. Off: Tare just processes everything and then tells you which folder it saved to.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Default model and language") {
                 RecognitionSettingsView(store: store)
+
+                Text("These are the same choices as Model and Language in the main window. This is also where a custom Hugging Face model ID can be entered.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Output") {
@@ -55,7 +124,7 @@ struct SettingsView: View {
 
                 Toggle("Create Batch Folder", isOn: $store.createBatchFolder)
 
-                Text("Transcript file formats are chosen in the Transcribe tab's Export panel.")
+                Text("Choose which transcript files to write under Output files in the main window.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -67,6 +136,52 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            Section("Transcript names") {
+                Toggle("Use smart transcript names", isOn: $store.smartTranscriptNamingEnabled)
+
+                Text("Tare asks FreeLLMAPI for a compact subject and folder name using the transcript excerpt. It only makes a short request while an export is running, never starts a background server, and falls back to the source filename when unavailable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                SecureField("FreeLLMAPI unified key", text: $freeLLMAPIKey)
+
+                HStack {
+                    Button("Save Key") {
+                        store.saveFreeLLMAPIKey(freeLLMAPIKey)
+                        freeLLMAPIKey = ""
+                    }
+                    .disabled(freeLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if store.freeLLMAPIKeyConfigured {
+                        Button("Remove Key", role: .destructive) {
+                            store.removeFreeLLMAPIKey()
+                        }
+                    }
+
+                    Spacer()
+
+                    Button("Open FreeLLMAPI") {
+                        store.openFreeLLMAPI()
+                    }
+                }
+
+                Text(store.freeLLMAPIStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+        }
+        .formStyle(.grouped)
+        .task { await store.refreshFreeLLMAPIStatus() }
+    }
+}
+
+private struct LibrarySettingsPane: View {
+    @ObservedObject var store: TranscriptionStore
+
+    var body: some View {
+        Form {
             Section("Media library") {
                 LabeledContent("Search folders") {
                     Text(store.scanRoots.isEmpty
@@ -118,7 +233,7 @@ struct SettingsView: View {
                     }
 
                     Button("Scan for MKV") {
-                        pendingLibraryAction = .scan
+                        Task { await store.scanForMKVs() }
                     }
                     .disabled(!store.canScanForMKVs)
 
@@ -136,62 +251,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section("Transcript names") {
-                Toggle("Use smart transcript names", isOn: $store.smartTranscriptNamingEnabled)
-
-                Text("Tare asks FreeLLMAPI for a compact subject and folder name using the transcript excerpt. It only makes a short request while an export is running, never starts a background server, and falls back to the source filename when unavailable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                SecureField("FreeLLMAPI unified key", text: $freeLLMAPIKey)
-
-                HStack {
-                    Button("Save Key") {
-                        store.saveFreeLLMAPIKey(freeLLMAPIKey)
-                        freeLLMAPIKey = ""
-                    }
-                    .disabled(freeLLMAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                    if store.freeLLMAPIKeyConfigured {
-                        Button("Remove Key", role: .destructive) {
-                            store.removeFreeLLMAPIKey()
-                        }
-                    }
-
-                    Spacer()
-
-                    Button("Open FreeLLMAPI") {
-                        store.openFreeLLMAPI()
-                    }
-                }
-
-                Text(store.freeLLMAPIStatusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
         }
-        .padding()
-        .task { await store.refreshFreeLLMAPIStatus() }
-        .confirmationDialog(
-            "Rename and move files?",
-            isPresented: Binding(
-                get: { pendingLibraryAction != nil },
-                set: { if !$0 { pendingLibraryAction = nil } }
-            ),
-            presenting: pendingLibraryAction
-        ) { action in
-            switch action {
-            case .scan:
-                Button("Scan Folders") {
-                    pendingLibraryAction = nil
-                    Task { await store.scanForMKVs() }
-                }
-            }
-            Button("Cancel", role: .cancel) { pendingLibraryAction = nil }
-        } message: { _ in
-            Text("Tare looks for MKV files in your \(store.scanRoots.count) search folder\(store.scanRoots.count == 1 ? "" : "s") and adds what it finds to the queue. Nothing is renamed or moved.")
-        }
+        .formStyle(.grouped)
     }
 }

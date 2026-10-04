@@ -14,6 +14,27 @@ struct ModelsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let message = store.modelErrorMessage {
+                        InlineNotice(kind: .error, title: "Model setup", message: message) {
+                            Button("Dismiss") { store.modelErrorMessage = nil }
+                        }
+                    }
+
+                    if let preset = modelPendingRemoval {
+                        let size = store.modelStatus(for: preset)?.sizeDescription ?? "several GB"
+                        InlineNotice(
+                            kind: .warning,
+                            title: "Delete \(preset.displayName)?",
+                            message: "This deletes \(size) of cached files from your Hugging Face cache. It cannot be undone, and you will need to download the model again."
+                        ) {
+                            Button("Cancel") { modelPendingRemoval = nil }
+                            Button("Delete", role: .destructive) {
+                                modelPendingRemoval = nil
+                                Task { await store.removeModel(preset) }
+                            }
+                        }
+                    }
+
                     if let selectedPreset = WhisperModelPreset.preset(for: store.effectiveSelectedModelIdentifier),
                        selectedPreset.isLocal,
                        store.modelStatus(for: selectedPreset)?.isUsable != true,
@@ -68,36 +89,11 @@ struct ModelsView: View {
             if store.modelStatuses.isEmpty {
                 await store.refreshModelStatuses()
             }
-        }
-        .alert(
-            "Model setup",
-            isPresented: Binding(
-                get: { store.modelErrorMessage != nil },
-                set: { isPresented in
-                    if !isPresented { store.modelErrorMessage = nil }
-                }
-            )
-        ) {
-            Button("OK") { store.modelErrorMessage = nil }
-        } message: {
-            Text(store.modelErrorMessage ?? "Tare could not inspect the local model cache.")
-        }
-        .confirmationDialog(
-            "Delete cached model files?",
-            isPresented: Binding(
-                get: { modelPendingRemoval != nil },
-                set: { if !$0 { modelPendingRemoval = nil } }
-            ),
-            presenting: modelPendingRemoval
-        ) { preset in
-            Button("Delete \(preset.displayName)", role: .destructive) {
-                modelPendingRemoval = nil
-                Task { await store.removeModel(preset) }
+            // With nothing installed the download list is the whole point of
+            // this pane, so it should not start collapsed.
+            if store.installedModelPresets.isEmpty {
+                isShowingDownloadCatalog = true
             }
-            Button("Cancel", role: .cancel) { modelPendingRemoval = nil }
-        } message: { preset in
-            let size = store.modelStatus(for: preset)?.sizeDescription ?? "several GB"
-            Text("Tare will delete \(size) of cached files for \(preset.displayName) from your Hugging Face cache. This cannot be undone, and you will need to download the model again.")
         }
     }
 

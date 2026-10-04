@@ -1,40 +1,23 @@
 import SwiftUI
 import TranscriberCore
 
-struct EmptyQueueView: View {
-    @ObservedObject var store: TranscriptionStore
-
+/// Shown in the details panel when nothing is selected.
+struct DetailPlaceholderView: View {
     var body: some View {
-        let isEmptyQueue = store.jobs.isEmpty
-
-        VStack(spacing: Space.group) {
-            Image(systemName: store.dropIsTargeted ? "arrow.down.doc.fill" : "film.stack")
-                .imageScale(.large)
-                .foregroundStyle(store.dropIsTargeted ? Palette.active : Palette.textSecondary)
+        VStack(spacing: Space.close) {
+            Image(systemName: "text.alignleft")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(Palette.textTertiary)
                 .accessibilityHidden(true)
 
-            Text(store.dropIsTargeted ? "Drop to Add" : (isEmptyQueue ? "No Files" : "Nothing Selected"))
-                .font(Typography.pageTitle)
+            Text("No file selected")
+                .font(Typography.sectionHeader)
 
-            Text(store.dropIsTargeted
-                ? "Release to add these files to the queue."
-                : (isEmptyQueue
-                    ? "Add audio or video to start a batch. You can also drag files onto this window."
-                    : "Choose a file in the queue to see its status, transcript, and output files."))
-                .font(Typography.body)
+            Text("Choose a file in the queue to read its transcript and open its files.")
+                .font(Typography.caption)
                 .foregroundStyle(Palette.textSecondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
                 .fixedSize(horizontal: false, vertical: true)
-
-            if isEmptyQueue {
-                Button {
-                    store.presentFilePicker()
-                } label: {
-                    Label("Add Files", systemImage: "plus")
-                }
-                .controlSize(.large)
-            }
         }
         .padding(Space.page)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -51,19 +34,55 @@ struct JobDetailView: View {
 
             Divider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    JobStatusCard(store: store, job: job)
+            if let text = readableText {
+                // A lecture is thousands of words. It gets the whole pane in a
+                // real scrolling, searchable text view instead of a capped
+                // preview inside another scroller.
+                TranscriptReader(text: text)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Space.page) {
+                        JobStatusCard(store: store, job: job)
 
-                    TranscriptOutputView(job: job)
-
-                    ExportOptionsView(store: store)
-
-                    OutputFilesView(store: store, job: job)
+                        Text(emptyStateDetail)
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(Space.page)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(Space.page)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            if !job.outputURLs.isEmpty {
+                Divider()
+                OutputFilesBar(store: store, job: job)
+            }
+        }
+    }
+
+    /// Text is only shown for work that is finished or still current, so a failed
+    /// or cancelled run does not present a previous attempt's output as this
+    /// one's result.
+    private var readableText: String? {
+        guard job.status == .completed || job.status == .exporting,
+              let text = job.transcript?.fullText, !text.isEmpty else { return nil }
+        return text
+    }
+
+    private var emptyStateDetail: String {
+        switch job.status {
+        case .queued:
+            return "Press Transcribe to create the transcript for this file."
+        case .extractingAudio, .transcribing, .exporting:
+            return "The transcript appears here when the file finishes."
+        case .failed:
+            return "No transcript was produced. Fix the problem above, then choose Retry."
+        case .cancelled:
+            return "This file was stopped before it finished. Choose Requeue, then press Transcribe."
+        case .completed:
+            return "The model returned no text for this file. It may be silent."
         }
     }
 }
@@ -72,9 +91,13 @@ private struct DetailHeader: View {
     @ObservedObject var store: TranscriptionStore
     let job: TranscriptionJob
 
+    private static func isVideo(_ url: URL) -> Bool {
+        ["mp4", "m4v", "mov", "mkv", "avi", "webm"].contains(url.pathExtension.lowercased())
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "film")
+            Image(systemName: Self.isVideo(job.sourceURL) ? "film" : "waveform")
                 .font(.title3)
                 .foregroundStyle(.secondary)
 
@@ -111,11 +134,13 @@ private struct DetailHeader: View {
             Button {
                 store.reveal(job.sourceURL)
             } label: {
-                Label("Reveal Source", systemImage: "magnifyingglass")
+                Label("Reveal", systemImage: "magnifyingglass")
+                    .labelStyle(.iconOnly)
             }
+            .help("Reveal the source file in Finder")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, Space.page)
+        .padding(.vertical, Space.group)
     }
 }
 
@@ -149,9 +174,11 @@ private struct JobStatusCard: View {
                 }
             }
 
-            ProgressView(value: job.progress)
-                .accessibilityLabel("\(job.displayName) progress")
-                .accessibilityValue(progressDescription)
+            if job.status != .completed {
+                ProgressView(value: job.progress)
+                    .accessibilityLabel("\(job.displayName) progress")
+                    .accessibilityValue(progressDescription)
+            }
 
             if let chunks = job.chunkProgress, chunks.total > 1 {
                 Text("Chunk \(chunks.completed) of \(chunks.total)")
@@ -258,315 +285,70 @@ private struct JobTimingView: View {
     }
 }
 
-private struct ExportOptionsView: View {
-    @ObservedObject var store: TranscriptionStore
+/// The finished transcript, in a native text view.
+///
+/// SwiftUI `Text` lays out its whole string eagerly, which is slow and heavy for
+/// a lecture-length transcript. `NSTextView` lays out lazily, scrolls smoothly,
+/// supports selection, and gives ⌘F find for free.
+private struct TranscriptReader: View {
+    let text: String
+
+    private var wordCount: Int {
+        text.split(whereSeparator: \.isWhitespace).count
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.group) {
+        VStack(spacing: 0) {
             HStack {
-                Label("Export", systemImage: "square.and.arrow.down")
+                Text("Transcript")
                     .font(Typography.sectionHeader)
-
                 Spacer()
-
-                Toggle("Batch Folder", isOn: $store.createBatchFolder)
-                    .toggleStyle(.checkbox)
-
-                Button {
-                    store.revealOutputDirectory()
-                } label: {
-                    Label("Show in Finder", systemImage: "folder")
-                }
-
-                Button {
-                    store.presentOutputDirectoryPicker()
-                } label: {
-                    Label("Choose", systemImage: "folder.badge.gearshape")
-                }
-            }
-
-            Text(store.currentOutputDirectory.path)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(store.currentOutputDirectory.path)
-                .textSelection(.enabled)
-
-            Text(store.lastOutputDirectory == nil
-                 ? "Each batch gets its own named folder inside the configured output location."
-                 : "Current batch output folder. Choose a different root in Settings if needed.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-
-            RecognitionSettingsView(store: store)
-
-            VStack(alignment: .leading, spacing: Space.tight) {
-                Text("Transcript files")
+                Text("\(wordCount.formatted()) words · ⌘F to search")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
-
-                // Start is disabled while nothing is selected, so the reason has
-                // to live here rather than in a message that can never appear.
-                if !isUsableFormatSelection(store.selectedFormats) {
-                    Label(
-                        "Select at least one transcript file to start a batch.",
-                        systemImage: "exclamationmark.triangle"
-                    )
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-
-                ForEach(ExportFormat.visibleManualFormats) { format in
-                    Toggle(isOn: formatBinding(format)) {
-                        Text(format.displayName)
-                            .font(Typography.rowTitle)
-                    }
-                    .toggleStyle(.checkbox)
-                    .disabled(format.needsWordTimestamps && !modelProvidesWordTimestamps)
-                    .help(formatHelp(format))
-                }
-
-                if !modelProvidesWordTimestamps {
-                    Label(
-                        "\(store.effectiveSelectedModelIdentifier) does not produce word-level timings, so Word Timings and Apple Music TTML are unavailable.",
-                        systemImage: "info.circle"
-                    )
-                    .font(Typography.caption)
-                    .foregroundStyle(Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
             }
-        }
-        .padding(Space.group)
-        .background(Palette.contentBackground, in: RoundedRectangle(cornerRadius: Radius.card))
-    }
+            .padding(.horizontal, Space.page)
+            .padding(.vertical, Space.close)
 
-    private var modelProvidesWordTimestamps: Bool {
-        WhisperModelPreset.preset(for: store.effectiveSelectedModelIdentifier)?
-            .supportsWordTimestamps ?? true
-    }
+            Divider()
 
-    private func formatBinding(_ format: ExportFormat) -> Binding<Bool> {
-        Binding(
-            get: { store.selectedFormats.contains(format) },
-            set: { isEnabled in
-                if isEnabled {
-                    store.selectedFormats.insert(format)
-                } else {
-                    store.selectedFormats.remove(format)
-                }
-            }
-        )
-    }
-
-    private func formatHelp(_ format: ExportFormat) -> String {
-        if format.needsWordTimestamps && !modelProvidesWordTimestamps {
-            return "The selected model does not produce word-level timings."
-        }
-        return "Writes a .\(format.fileExtension) file beside the transcript."
-    }
-}
-
-private struct TranscriptOutputView: View {
-    let job: TranscriptionJob
-    @State private var isShowingFullTranscript = false
-    private static let previewCharacterLimit = 4_000
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Transcript output", systemImage: "text.alignleft")
-                        .font(.headline)
-                    Text("Your transcribed text appears here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Text(transcriptState)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let transcript = job.transcript, showsTranscriptText {
-                // No nested scroller: the inner one competed with the page for
-                // scroll events, which made the panels below unreachable while
-                // the pointer was over the text. A long transcript is capped and
-                // opened in full from the exported file or a sheet.
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(String(transcript.fullText.prefix(Self.previewCharacterLimit)))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if transcript.fullText.count > Self.previewCharacterLimit {
-                        HStack(spacing: 10) {
-                            Text("Preview limited to \(Self.previewCharacterLimit) characters.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Spacer()
-
-                            Button("Show Full Transcript") {
-                                isShowingFullTranscript = true
-                            }
-                            .buttonStyle(.link)
-                        }
-                    }
-                }
-                .padding(Space.close)
-                .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
-                .background(Palette.textWellBackground, in: RoundedRectangle(cornerRadius: Radius.inline))
-                .sheet(isPresented: $isShowingFullTranscript) {
-                    ScrollView {
-                        Text(transcript.fullText)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(Space.page)
-                    }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(emptyStateTitle, systemImage: emptyStateIcon)
-                        .font(.body.weight(.medium))
-                    Text(emptyStateDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
-            }
-        }
-        .padding(Space.group)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    /// The job's outcome wins over whether text happens to be present: a job
-    /// cancelled during export still holds the transcript it had produced, and
-    /// reporting "Ready" there contradicted the status card.
-    private var transcriptState: String {
-        switch job.status {
-        case .queued:
-            return "Not started"
-        case .extractingAudio, .transcribing:
-            return "In progress"
-        case .exporting:
-            return "Writing files"
-        case .failed:
-            return "Needs attention"
-        case .cancelled:
-            return "Cancelled"
-        case .completed:
-            return hasTranscriptText ? "Ready" : "No text"
-        }
-    }
-
-    private var hasTranscriptText: Bool {
-        guard let transcript = job.transcript else { return false }
-        return !transcript.fullText.isEmpty
-    }
-
-    /// Text is only shown for work that is finished or still current, so a
-    /// failed or cancelled run does not present a previous attempt's output as
-    /// this one's result.
-    private var showsTranscriptText: Bool {
-        hasTranscriptText && (job.status == .completed || job.status == .exporting)
-    }
-
-    private var emptyStateTitle: String {
-        switch job.status {
-        case .queued:
-            return "Ready to transcribe"
-        case .extractingAudio, .transcribing, .exporting:
-            return "Transcript will appear here"
-        case .failed:
-            return "No transcript was produced"
-        case .cancelled:
-            return "Transcription was cancelled"
-        case .completed:
-            return "No transcript text available"
-        }
-    }
-
-    private var emptyStateDetail: String {
-        switch job.status {
-        case .queued:
-            return "Choose Start above to create the transcript for this file."
-        case .extractingAudio, .transcribing, .exporting:
-            return "Tare updates this panel when transcription finishes."
-        case .failed:
-            return "Resolve the issue in the status card above, then choose Retry."
-        case .cancelled:
-            return "Choose Retry or Start to run this file again."
-        case .completed:
-            return "The local model returned no transcript text for this file."
-        }
-    }
-
-    private var emptyStateIcon: String {
-        switch job.status {
-        case .failed:
-            return "exclamationmark.triangle"
-        case .cancelled:
-            return "stop.circle"
-        case .queued:
-            return "text.badge.plus"
-        case .extractingAudio, .transcribing, .exporting:
-            return "waveform"
-        case .completed:
-            return "text.magnifyingglass"
+            LargeTextView(text: text)
         }
     }
 }
 
-private struct OutputFilesView: View {
+private struct OutputFilesBar: View {
     @ObservedObject var store: TranscriptionStore
     let job: TranscriptionJob
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Files", systemImage: "doc.on.doc")
-                .font(.headline)
+        HStack(spacing: Space.group) {
+            Label(
+                "\(job.outputURLs.count) file\(job.outputURLs.count == 1 ? "" : "s") written",
+                systemImage: "doc.on.doc"
+            )
+            .font(Typography.caption)
+            .foregroundStyle(Palette.textSecondary)
 
-            if job.outputURLs.isEmpty {
-                Text("No output yet")
-                    .foregroundStyle(.secondary)
-            } else {
+            Spacer()
+
+            Menu("Show in Finder") {
                 ForEach(job.outputURLs, id: \.self) { url in
-                    HStack {
-                        Image(systemName: iconName(for: url))
-                            .foregroundStyle(.secondary)
-
-                        Text(url.lastPathComponent)
-                            .lineLimit(1)
-
-                        Spacer()
-
-                        Button {
-                            store.reveal(url)
-                        } label: {
-                            Label("Reveal", systemImage: "magnifyingglass")
-                        }
-                    }
+                    Button(url.lastPathComponent) { store.reveal(url) }
                 }
             }
-        }
-        .padding(Space.group)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
+            .menuStyle(.button)
+            .fixedSize()
 
-    private func iconName(for url: URL) -> String {
-        switch url.pathExtension.lowercased() {
-        case "mp4", "m4v", "mkv", "mov":
-            return "film"
-        default:
-            return "doc.text"
+            Menu("Open") {
+                ForEach(job.outputURLs, id: \.self) { url in
+                    Button(url.lastPathComponent) { store.open(url) }
+                }
+            }
+            .menuStyle(.button)
+            .fixedSize()
         }
+        .padding(.horizontal, Space.page)
+        .padding(.vertical, Space.close)
     }
 }

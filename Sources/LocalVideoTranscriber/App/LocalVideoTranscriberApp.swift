@@ -12,7 +12,7 @@ struct TareApp: App {
         // file sent to it — opening 40 files from Finder produced 40 windows.
         Window("Tare", id: "main") {
             ContentView(store: store)
-                .frame(minWidth: 980, minHeight: 620)
+                .frame(minWidth: 820, minHeight: 560)
                 // SwiftUI owns the open-files event, so the AppDelegate's
                 // application(_:open:) is never delivered and files sent to the
                 // app — Finder's Open With, a Dock drop, or
@@ -23,6 +23,13 @@ struct TareApp: App {
                 }
         }
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    store.page = .settings(.general)
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("Add Files...") {
                     store.presentFilePicker()
@@ -39,10 +46,6 @@ struct TareApp: App {
                 .keyboardShortcut(.return, modifiers: [.command])
                 .disabled(!store.canStart && !store.isRunning && !store.isPreparingModel)
             }
-        }
-        Settings {
-            SettingsView(store: store)
-                .frame(minWidth: 420, idealWidth: 520, minHeight: 480, idealHeight: 640)
         }
     }
 }

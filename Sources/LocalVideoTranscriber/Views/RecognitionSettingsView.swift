@@ -45,7 +45,7 @@ struct RecognitionSettingsView: View {
             }
 
             if store.installedModelPresets.isEmpty && !store.isRefreshingModels && !store.isUsingGeminiTranscription {
-                Label("No supported local models found. Open Models to refresh or download one.", systemImage: "arrow.down.circle")
+                Label("No supported local models found. Use the Models tab in Settings to download one.", systemImage: "arrow.down.circle")
                     .font(.caption)
                     .foregroundStyle(Palette.warning)
             }
@@ -88,7 +88,7 @@ struct RecognitionSettingsView: View {
 
             if WhisperModelPreset.isGeminiTranscribe(store.modelIdentifier) {
                 Label(
-                    "Cloud transcription sends audio to Google Gemini. Configure API keys and long-recording options in the Cloud tab.",
+                    "Cloud transcription sends audio to Google Gemini. Configure API keys and long-recording options in the Cloud tab of Settings.",
                     systemImage: "cloud"
                 )
                 .font(.caption)
@@ -101,7 +101,7 @@ struct RecognitionSettingsView: View {
         Picker("Model", selection: $store.modelIdentifier) {
             if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),
                selectedPreset.isCloud {
-                Text("\(selectedPreset.displayName) · Configure in Cloud")
+                Text("\(selectedPreset.displayName) · Set up in Cloud tab")
                     .tag(selectedPreset.id)
             } else if let selectedPreset = WhisperModelPreset.preset(for: store.modelIdentifier),
                       !store.installedModelPresets.contains(selectedPreset) {
@@ -181,7 +181,7 @@ struct RecognitionSettingsView: View {
         if preset.isCloud {
             let keyCount = store.geminiUsableAPIKeyCount
             guard keyCount > 0 else {
-                return "Cloud model · configure a usable Gemini API key in Cloud"
+                return "Cloud model · add a Gemini API key in the Cloud tab"
             }
             let suffix = keyCount == 1 ? "key" : "keys"
             return "Cloud model · \(keyCount) usable API \(suffix)"
@@ -196,9 +196,9 @@ struct RecognitionSettingsView: View {
         }
 
         if status.isAvailable {
-            return status.issueMessage ?? "Cached but not usable — open Models to repair or choose another model"
+            return status.issueMessage ?? "Cached but not usable — repair it in the Models tab or choose another model"
         }
 
-        return "Not available locally — open Models to choose an installed model or download this one"
+        return "Not available locally — download it in the Models tab or choose an installed model"
     }
 }

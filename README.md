@@ -14,16 +14,18 @@ transcript artifacts to a folder on the Mac.
 - Every supported input is automatically embedded with its transcription when possible: audio files receive custom lyrics, MKV files are updated with a subtitle track, and MP4/MOV/M4V files produce an IINA-friendly `.captioned.mkv`.
 - Completed exports get a compact subject-based name and their own folder. Tare writes a `.tare-link.json` manifest inside that folder plus a hidden, compact source-side pointer. The pointer records the source fingerprint, every generated artifact, the semantic name, and the naming strategy/model, so re-importing the source can rediscover exactly which transcripts belong to it without overwriting earlier exports.
 - Smart names are optional and on-demand: when the local FreeLLMAPI desktop app is already open, Tare sends a short transcript excerpt to its OpenAI-compatible endpoint and asks a quality-first, benchmark-informed free model for a title and folder name. Tare never starts a background server; if the app is closed, no key is configured, or a request times out, it uses deterministic filename cleanup and still completes the export.
-- Transcript sidecars are chosen in the Export panel: plain text, timestamped text, SRT, VTT, JSON, word timings, Apple Music lyrics, and TTML. Word Timings and TTML are disabled, with the reason, when the selected model does not produce word-level alignment.
+- Transcript sidecars are chosen under **Output → Files** in the main window: plain text, timestamped text, SRT, VTT, JSON, word timings, Apple Music lyrics, and TTML. Word Timings and TTML are disabled, with the reason, when the selected model does not produce word-level alignment.
 - Model presets include Parakeet v3 for the fastest/lowest-memory path, Qwen3-ASR 1.7B 6-bit for a compact accuracy-focused path, Voxtral Mini 3B 8-bit with a dense encoder for the higher-quality 16-GB path, plus Canary-Qwen 2.5B, Voxtral Small 24B, Cohere Transcribe 2B, Qwen3-ASR 1.7B (BF16 and 8-bit), Voxtral Mini 4B realtime, Whisper Large v3, MOSS-Diarize 0.9B, and the existing smaller/English-only Whisper choices. The default local model remains the faster multilingual base preset.
-- The Models tab discovers supported models already present in the local Hugging Face cache and keeps the normal model picker limited to those models. A collapsed download catalog is available when a new model is needed; the active model is protected from removal.
+- The Models tab of Settings discovers supported models already present in the local Hugging Face cache and keeps the model cards in the main window limited to those models. A collapsed download catalog is available when a new model is needed; the active model is protected from removal.
 - Model readiness includes backend, cache, and device-capacity checks. Canary-Qwen is full precision and needs about 13.3 GiB in one Metal buffer; on a 16 GB M4 it is shown as cached but not runnable, with Parakeet v3 and Qwen3-ASR 1.7B 6-bit offered as safe local choices.
 - The saved model selection is checked at launch; if it is cached but not runnable on this Mac, Tare selects the first usable local model and reports the recovery.
 - Long videos are split into automatic 10-minute chunks and transcribed one chunk at a time so MLX does not run competing Metal jobs against the same memory pool.
 - Text transcript, model, language, and batch folder choices are saved so repeated runs keep the last selected workflow.
 - The Add Files action uses SwiftUI's native file importer, supports multiple selections, and filters unsupported formats after selection so valid audio remains selectable. Drag and drop, settings, menus, and app bundle.
-- The queue is a table with a state column, type, progress, and a note. Progress reports real per-chunk completion for both local and cloud runs, and the elapsed counter and ETA use monospaced digits in fixed-width slots so nothing jitters as a batch runs.
-- A fixed-height status header and strip show the current state, the active file, and a batch summary. A finished batch reports what it did instead of resetting to `Ready`.
+- The main window is two panes. The left pane is the setup, top to bottom: **1 Model** (selectable cards, plus Google Gemini), **2 Language**, **3 Output** (which files, and where), and one **Transcribe** button. The right pane is the file list: each row shows its state, a progress bar, and **Open** / **View** once it is done. Models, Cloud, the media library, and smart naming live in Settings (⌘,); the main window links straight to the right Settings tab when something is missing.
+- A batch has four visible stages: add files, pick a model, watch per-file and overall progress, then a green "Done" bar with Show in Finder, Retry Failed, and Clear Finished.
+- The queue is a table with a state column, the file and what is happening to it, progress, and row actions. Progress reports real per-chunk completion for both local and cloud runs, and the elapsed counter and ETA use monospaced digits in fixed-width slots so nothing jitters as a batch runs.
+- A bar under the file list shows the overall count and progress while a batch runs, and a finished batch reports what it did (completed, failed) instead of resetting to `Ready`.
 - MKV search roots and the media-library folder are configurable in Settings, where discovered files can be scanned and names cleaned and organized. Organizing renames and moves files on disk, so Tare lists the affected files and asks first.
 
 ## Backend
@@ -53,7 +55,7 @@ picker and are labeled for repair.
 
 The default output root is `~/Documents/Tare Transcripts`. Tare creates that
 folder when the app launches, creates a named subfolder for each batch, shows
-the current destination in the Export panel, and provides a direct Show in
+the current destination under Output in the main window, and provides a direct Show in
 Finder action.
 
 ### Smart transcript names and compact pointers
@@ -100,7 +102,7 @@ for availability, and `TARE_FREELLM_MODEL` can pin a known-good route.
 
 ### Google Gemini cloud transcription
 
-The **Transcribe via Cloud** tab is a separate provider path for the exact
+The **Cloud** tab of Settings is a separate provider path for the exact
 `gemini-3.5-transcribe` model. It does not enter the local Hugging Face model
 catalog, does not require the local MLX bridge, and does not put model files in
 the app. The user must explicitly select the cloud model and add at least one

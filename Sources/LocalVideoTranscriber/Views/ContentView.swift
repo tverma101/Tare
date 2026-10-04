@@ -4,62 +4,34 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var store: TranscriptionStore
+    @State private var detailJobID: TranscriptionJob.ID?
 
     var body: some View {
-        TabView {
-            HSplitView {
-                QueueSidebarView(store: store)
-                    .frame(
-                        minWidth: Metric.sidebarMin,
-                        idealWidth: Metric.sidebarIdeal,
-                        maxWidth: Metric.sidebarMax
-                    )
+        VStack(spacing: 0) {
+            NoticeStack(store: store)
 
-                QueueWorkspaceView(store: store)
-                    .frame(minWidth: Metric.detailMin)
-            }
-            .toolbar {
-                ToolbarItemGroup {
-                    Button {
-                        store.presentFilePicker()
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                    }
-                    .help("Add audio or video to the queue")
+            switch store.page {
+            case .transcribe:
+                HStack(spacing: 0) {
+                    ConfigurationPanel(store: store)
+                        .frame(width: Metric.configPanelWidth)
 
-                    Button {
-                        store.removeSelectedJob()
-                    } label: {
-                        Label("Remove", systemImage: "minus")
-                    }
-                    .disabled(store.selectedJobID == nil || store.isScanning || store.isOrganizing)
-                    .help(store.selectedJobID == nil
-                        ? "Select a file in the queue first"
-                        : "Remove from the queue. Output files already written are kept.")
-                    .keyboardShortcut(.delete, modifiers: [.command])
+                    Divider()
+
+                    WorkspaceView(store: store, detailJobID: $detailJobID)
+                        .frame(minWidth: Metric.detailMin)
                 }
+            case let .settings(tab):
+                SettingsView(store: store, tab: tab)
             }
-            .onDrop(
-                of: [UTType.fileURL.identifier],
-                isTargeted: $store.dropIsTargeted,
-                perform: store.addDroppedProviders
-            )
-            .onAppear {
-                store.startLaunchWorkIfNeeded()
-            }
-            .tabItem {
-                Label("Transcribe", systemImage: "waveform")
-            }
-
-            ModelsView(store: store)
-                .tabItem {
-                    Label("Models", systemImage: "arrow.down.circle")
-                }
-
-            CloudTranscriptionView(store: store)
-            .tabItem {
-                Label("Cloud", systemImage: "cloud")
-            }
+        }
+        .onDrop(
+            of: [UTType.fileURL.identifier],
+            isTargeted: $store.dropIsTargeted,
+            perform: store.addDroppedProviders
+        )
+        .onAppear {
+            store.startLaunchWorkIfNeeded()
         }
         .fileImporter(
             isPresented: $store.isFileImporterPresented,
@@ -67,38 +39,41 @@ struct ContentView: View {
             allowsMultipleSelection: true,
             onCompletion: store.handleFileImporterResult
         )
-        .alert(
-            "Cloud transcription",
-            isPresented: Binding(
-                get: { store.cloudErrorMessage != nil },
-                set: { isPresented in
-                    if !isPresented { store.cloudErrorMessage = nil }
-                }
-            )
-        ) {
-            Button("OK") { store.cloudErrorMessage = nil }
-        } message: {
-            Text(store.cloudErrorMessage ?? "Tare could not update the Gemini configuration.")
-        }
         .statusAnnouncements(store)
-        .confirmationDialog(
-            "Rename and move files?",
-            isPresented: $store.isConfirmingOrganize
-        ) {
-            Button(
-                "Rename and Move \(store.mkvSourceURLs.count) File\(store.mkvSourceURLs.count == 1 ? "" : "s")",
-                role: .destructive
-            ) {
-                Task { await store.confirmOrganize() }
+    }
+}
+
+/// Messages and confirmations that need an answer, shown at the top of the
+/// window rather than as alerts.
+private struct NoticeStack: View {
+    @ObservedObject var store: TranscriptionStore
+
+    var body: some View {
+        VStack(spacing: Space.close) {
+            if let message = store.cloudErrorMessage {
+                InlineNotice(kind: .error, title: "Cloud transcription", message: message) {
+                    Button("Dismiss") { store.cloudErrorMessage = nil }
+                }
             }
-            Button("Cancel", role: .cancel) {
-                store.isConfirmingOrganize = false
+
+            if store.isConfirmingOrganize {
+                let names = store.mkvSourceURLs.prefix(6).map(\.lastPathComponent)
+                let overflow = store.mkvSourceURLs.count - names.count
+                let list = names.joined(separator: ", ") + (overflow > 0 ? " and \(overflow) more" : "")
+                InlineNotice(
+                    kind: .warning,
+                    title: "Rename and move \(store.mkvSourceURLs.count) file\(store.mkvSourceURLs.count == 1 ? "" : "s")?",
+                    message: "Tare will rename and move \(list) into \(store.libraryDirectory.lastPathComponent). This changes files on disk."
+                ) {
+                    Button("Cancel") { store.isConfirmingOrganize = false }
+                    Button("Rename and Move") {
+                        Task { await store.confirmOrganize() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
-        } message: {
-            let names = store.mkvSourceURLs.prefix(8).map(\.lastPathComponent)
-            let overflow = store.mkvSourceURLs.count - names.count
-            let list = names.joined(separator: "\n") + (overflow > 0 ? "\n…and \(overflow) more" : "")
-            return Text("Tare will rename and move these files into \(store.libraryDirectory.lastPathComponent):\n\n\(list)\n\nThis changes files on disk.")
         }
+        .padding(.horizontal, store.cloudErrorMessage != nil || store.isConfirmingOrganize ? Space.page : 0)
+        .padding(.top, store.cloudErrorMessage != nil || store.isConfirmingOrganize ? Space.close : 0)
     }
 }

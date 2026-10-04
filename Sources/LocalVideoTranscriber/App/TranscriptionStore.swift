@@ -33,6 +33,15 @@ final class TranscriptionStore: ObservableObject {
             UserDefaults.standard.set(attachCaptionedVideoToSource, forKey: Self.attachCaptionedVideoToSourceDefaultsKey)
         }
     }
+    /// Whether finished files offer an in-app transcript view. Off, a batch just
+    /// runs and then says where everything was saved.
+    @Published var showTranscriptPreview: Bool = UserDefaults.standard.object(forKey: "showTranscriptPreview") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showTranscriptPreview, forKey: "showTranscriptPreview")
+        }
+    }
+    /// Which page the single window is showing.
+    @Published var page: AppPage = .transcribe
     @Published var libraryDirectory: URL {
         didSet {
             UserDefaults.standard.set(libraryDirectory.path, forKey: Self.libraryDirectoryDefaultsKey)
@@ -147,6 +156,9 @@ final class TranscriptionStore: ObservableObject {
     @Published var statusMessage = "Ready"
     @Published var modelStatuses: [String: ModelStatus] = [:]
     @Published var isRefreshingModels = false
+    /// True once the first inventory of the local model cache has finished, so an
+    /// empty list can be told apart from one that has not loaded yet.
+    @Published private(set) var didFinishModelScan = false
     @Published var modelOperation: String?
     @Published var modelOperationModelID: String?
     @Published var modelErrorMessage: String?
@@ -1533,7 +1545,10 @@ final class TranscriptionStore: ObservableObject {
         }
 
         isRefreshingModels = true
-        defer { isRefreshingModels = false }
+        defer {
+            isRefreshingModels = false
+            didFinishModelScan = true
+        }
 
         do {
             let knownModelIDs = Set(WhisperModelPreset.local.map(\.id))
