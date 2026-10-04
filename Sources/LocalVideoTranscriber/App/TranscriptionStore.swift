@@ -1163,7 +1163,7 @@ final class TranscriptionStore: ObservableObject {
         } catch {
             statusMessage = "Could not create output folder"
             outputDirectoryError = Self.ensureDirectory(attemptedDirectory)
-                ?? "Tare could not prepare \(attemptedDirectory.path): \(error.localizedDescription)"
+                ?? "Tare could not save to the folder “\(attemptedDirectory.lastPathComponent)”: \(error.localizedDescription)"
             return
         }
 
@@ -1205,7 +1205,7 @@ final class TranscriptionStore: ObservableObject {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             return nil
         } catch {
-            return "Tare could not prepare \(url.path): \(error.localizedDescription)"
+            return "Tare could not save to the folder “\(url.lastPathComponent)”: \(error.localizedDescription)"
         }
     }
 

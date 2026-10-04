@@ -121,7 +121,7 @@ private struct ResultBar: View {
                 Text(title(completed: completed, failed: failed))
                     .font(Typography.paneTitle)
 
-                Text("Saved to \(store.lastBatchPathForDisplay)")
+                Text("Saved in \(store.lastBatchFolderName)")
                     .font(Typography.caption)
                     .foregroundStyle(Palette.textSecondary)
                     .lineLimit(1)

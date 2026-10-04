@@ -68,11 +68,10 @@ private struct GeneralSettingsPane: View {
                     Label("Output location", systemImage: "folder")
                         .font(.subheadline.weight(.semibold))
 
-                    Text(store.currentOutputDirectory.path)
+                    Text(store.outputFolderName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
                         .help(store.currentOutputDirectory.path)
 
                     HStack {
@@ -168,9 +167,8 @@ private struct LibrarySettingsPane: View {
 
                 ForEach(store.scanRoots, id: \.standardizedFileURL) { root in
                     HStack(spacing: 8) {
-                        Text(root.path)
+                        Label(FolderName.display(root), systemImage: "folder")
                             .lineLimit(1)
-                            .truncationMode(.middle)
                             .help(root.path)
                             .font(.caption)
 
@@ -194,9 +192,8 @@ private struct LibrarySettingsPane: View {
                 }
 
                 LabeledContent("Library folder") {
-                    Text(store.libraryDirectory.path)
+                    Text(FolderName.display(store.libraryDirectory))
                         .lineLimit(1)
-                        .truncationMode(.middle)
                         .help(store.libraryDirectory.path)
                         .font(.caption)
                 }

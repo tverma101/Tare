@@ -100,9 +100,10 @@ struct ConfigurationPanel: View {
             }
 
             LabeledContent("Save to") {
-                Text(store.outputPathForDisplay)
+                Label(store.outputFolderName, systemImage: "folder")
+                    .labelStyle(.titleAndIcon)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                     .help(store.currentOutputDirectory.path)
             }
 

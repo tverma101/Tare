@@ -9,8 +9,11 @@ struct PastTranscript: Identifiable, Hashable {
     let title: String
     let date: Date
     let modelName: String?
-    let location: String
+    /// The folders between the Tare output root and this result, outermost first.
+    let folderPath: [String]
     let files: [URL]
+
+    var modelSortKey: String { modelName ?? "" }
 
     var primary: URL? { OutputFileKind.primary(in: files) }
     var folder: URL { URL(fileURLWithPath: id, isDirectory: true) }
@@ -74,26 +77,58 @@ enum PastTranscriptScanner {
                 ?? .distantPast
 
             let root = rootForFolder[folder]?.standardizedFileURL.path ?? ""
-            var location = folderURL.deletingLastPathComponent().path
-            if location.hasPrefix(root) { location = String(location.dropFirst(root.count)) }
-            location = location.split(separator: "/").joined(separator: " › ")
+            var parent = folderURL.deletingLastPathComponent().path
+            if parent.hasPrefix(root) { parent = String(parent.dropFirst(root.count)) }
+            // Tare's dated "Transcription Batch" wrapper folders are bookkeeping,
+            // not somewhere anyone filed anything, so a result belongs to the
+            // folder the batch sits in.
+            let folderPath = parent.split(separator: "/").map(String.init)
+                .filter { folderDisplayName($0) == $0 }
 
             results.append(
                 PastTranscript(
                     id: folder,
-                    title: manifest?.displayName ?? folderURL.lastPathComponent,
+                    title: cleanedTitle(manifest?.displayName ?? folderURL.lastPathComponent),
                     date: manifest?.createdAt ?? modified,
                     modelName: manifest?.modelIdentifier.map {
                         (WhisperModelPreset.preset(for: $0)?.displayName
                             ?? ($0.split(separator: "/").last.map(String.init) ?? $0))
                             .components(separatedBy: " · ").first ?? $0
                     },
-                    location: location,
+                    folderPath: folderPath,
                     files: files.sorted { $0.lastPathComponent < $1.lastPathComponent }
                 )
             )
         }
         return results.sorted { $0.date > $1.date }
+    }
+
+    /// "Southern Wake Campus 11 Original 20260825 111157 Transcript 2" reads as
+    /// "Southern Wake Campus 11": the suffixes are Tare's and the recorder's
+    /// bookkeeping, not part of the name anyone uses.
+    static func cleanedTitle(_ raw: String) -> String {
+        var title = raw
+        title = title.replacingOccurrences(of: #"\s+Transcript(\s+\d+)?$"#, with: "", options: .regularExpression)
+        title = title.replacingOccurrences(of: #"\s+Original\s+\d{8}\s+\d{6}$"#, with: "", options: .regularExpression)
+        title = title.trimmingCharacters(in: .whitespaces)
+        return title.isEmpty ? raw : title
+    }
+
+    /// "Transcription Batch 2026-09-27 16-18-20 (5 Files)" reads as "Batch of
+    /// Sep 27, 4:18 PM (5 files)"; any other folder keeps its own name.
+    static func folderDisplayName(_ raw: String) -> String {
+        let pattern = #"^Transcription Batch (\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})-(\d{2}) \((\d+) Files?\)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)) else { return raw }
+        func part(_ i: Int) -> Int {
+            Range(match.range(at: i), in: raw).flatMap { Int(raw[$0]) } ?? 0
+        }
+        var components = DateComponents()
+        components.year = part(1); components.month = part(2); components.day = part(3)
+        components.hour = part(4); components.minute = part(5)
+        guard let date = Calendar.current.date(from: components) else { return raw }
+        let count = part(7)
+        return "Batch of \(date.formatted(date: .abbreviated, time: .shortened)) (\(count) file\(count == 1 ? "" : "s"))"
     }
 
     /// The Tare output root, and the chosen output folder when it lives elsewhere.

@@ -13,14 +13,20 @@ struct ContentView: View {
 
             switch store.page {
             case .transcribe:
-                HStack(spacing: 0) {
-                    ConfigurationPanel(store: store)
-                        .frame(width: Metric.configPanelWidth)
+                if store.workspaceMode == .library {
+                    // Browsing earlier results needs no setup, so it gets the
+                    // whole window.
+                    LibraryView(store: store)
+                } else {
+                    HStack(spacing: 0) {
+                        ConfigurationPanel(store: store)
+                            .frame(width: Metric.configPanelWidth)
 
-                    Divider()
+                        Divider()
 
-                    WorkspaceView(store: store, detailJobID: $detailJobID)
-                        .frame(minWidth: Metric.detailMin)
+                        WorkspaceView(store: store, detailJobID: $detailJobID)
+                            .frame(minWidth: Metric.detailMin)
+                    }
                 }
             case let .settings(tab):
                 SettingsView(store: store, tab: tab)
@@ -58,22 +64,13 @@ struct ContentView: View {
         switch store.page {
         case .settings: return "Settings"
         case .transcribe:
-            if store.workspaceMode == .library {
-                return openPast?.title ?? "Tare"
-            }
+            if store.workspaceMode == .library { return "Library" }
             return openJob?.displayName ?? "Tare"
         }
     }
 
-    private var openPast: PastTranscript? {
-        store.openPastTranscriptID.flatMap { id in store.pastTranscripts.first { $0.id == id } }
-    }
-
     private var windowSubtitle: String {
-        if store.workspaceMode == .library, case .transcribe = store.page {
-            let count = store.pastTranscripts.count
-            return openPast == nil && count > 0 ? "\(count) earlier transcript\(count == 1 ? "" : "s")" : ""
-        }
+        if store.workspaceMode == .library { return "" }
         guard case .transcribe = store.page, openJob == nil else { return "" }
         let count = store.jobs.count
         guard count > 0 else { return "" }
@@ -108,46 +105,14 @@ struct ContentView: View {
                 .help("Back to your files (Esc)")
             }
         } else if store.workspaceMode == .library {
-            if openPast != nil {
-                ToolbarItem(placement: .navigation) {
-                    Button {
-                        store.openPastTranscriptID = nil
-                    } label: {
-                        Label("Library", systemImage: "chevron.left")
-                    }
-                    .keyboardShortcut(.cancelAction)
-                    .help("Back to earlier transcripts (Esc)")
+            modeSwitcher
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    store.presentFilePicker()
+                } label: {
+                    Label("Add Files", systemImage: "plus")
                 }
-
-                if let text = store.openPastTranscriptText, !text.isEmpty {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(text, forType: .string)
-                        } label: {
-                            Label("Copy Transcript", systemImage: "doc.on.doc")
-                        }
-                        .help("Copy the whole transcript")
-                    }
-                }
-            } else {
-                modeSwitcher
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        store.refreshPastTranscripts()
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(store.isScanningPast)
-                    .help("Look for transcripts again")
-
-                    Button {
-                        store.presentFilePicker()
-                    } label: {
-                        Label("Add Files", systemImage: "plus")
-                    }
-                    .help("Add audio or video files (⌘O)")
-                }
+                .help("Add audio or video files (⌘O)")
             }
         } else if let job = openJob {
             ToolbarItem(placement: .navigation) {

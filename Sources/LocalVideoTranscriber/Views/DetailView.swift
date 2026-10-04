@@ -106,27 +106,14 @@ private struct DetailHeader: View {
                     .font(.headline)
                     .lineLimit(1)
 
-                Text(job.sourceURL.deletingLastPathComponent().path)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(job.sourceURL.deletingLastPathComponent().path)
-                    .textSelection(.enabled)
-
-                if let linkedTranscriptURL = job.linkedTranscriptURL {
-                    Button {
-                        store.reveal(linkedTranscriptURL)
-                    } label: {
-                        Label(
-                            "Linked transcript: \(linkedTranscriptURL.lastPathComponent)",
-                            systemImage: "link"
-                        )
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                    .lineLimit(1)
-                }
+                Label(
+                    "From \(FolderName.display(job.sourceURL.deletingLastPathComponent()))",
+                    systemImage: "folder"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(job.sourceURL.deletingLastPathComponent().path)
             }
 
             Spacer()

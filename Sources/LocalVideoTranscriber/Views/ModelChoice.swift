@@ -40,6 +40,14 @@ enum ModelChoice {
     }
 }
 
+/// A folder as a person names it: its own name, never its path.
+enum FolderName {
+    static func display(_ url: URL) -> String {
+        let name = FileManager.default.displayName(atPath: url.path)
+        return PastTranscriptScanner.folderDisplayName(name)
+    }
+}
+
 /// A problem with the current setup, in words, with the place to fix it.
 struct SetupIssue: Equatable {
     enum Severity { case error, warning, info }
@@ -136,14 +144,15 @@ extension TranscriptionStore {
         }
     }
 
-    /// The folder transcripts go into, before a batch runs.
-    var outputPathForDisplay: String {
-        (outputDirectory.path as NSString).abbreviatingWithTildeInPath
+    /// The folder transcripts go into, before a batch runs, by name. People
+    /// recognise a folder by its name, not by where it sits on disk.
+    var outputFolderName: String {
+        FolderName.display(outputDirectory)
     }
 
     /// Where the last batch actually wrote its files.
-    var lastBatchPathForDisplay: String {
-        (currentOutputDirectory.path as NSString).abbreviatingWithTildeInPath
+    var lastBatchFolderName: String {
+        FolderName.display(currentOutputDirectory)
     }
 }
 
