@@ -1,0 +1,43 @@
+name: Core build and export smoke tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tare-core-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-core:
+    name: Swift core and export fixtures
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Build the core smoke-test executable
+        run: swift build --jobs 4 --product TranscriberCoreSmokeTests
+
+      - name: Verify deterministic transcript exports
+        run: swift run --skip-build TranscriberCoreSmokeTests --exports-only
+
+      - name: Build the command-line batch tool
+        run: swift build --jobs 4 --product TranscriberBatch
+
+      - name: Build the macOS app executable
+        run: swift build --jobs 4 --product Tare
+
+# This workflow only proves compilation and deterministic local export behavior.
+# Model inference, live Gemini calls, Keychain behavior, ffmpeg integrations,
+# app GUI, and installed-device/OS performance require separate acceptance.
