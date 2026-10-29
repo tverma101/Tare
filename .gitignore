@@ -12,3 +12,6 @@ benchmarks/
 docs/codex/
 docs/ux/
 .swiftpm/
+
+# Generated iconutil intermediate; the original PNG and compiled .icns remain tracked.
+/Assets/Tare.iconset/
